@@ -58,3 +58,6 @@ select cron.schedule('sc-resumo-dia', '0 1 * * *', $cmd$select public.invoke_wor
 
 -- sc-semana  (0 23 * * 0)
 select cron.schedule('sc-semana', '0 23 * * 0', $cmd$select public.invoke_worker('weekly')$cmd$);
+
+-- 0024: bot de atendimento (a cada 30 s)
+select cron.schedule('sc-atendente', '30 seconds', $$select public.atendente_varrer()$$);
