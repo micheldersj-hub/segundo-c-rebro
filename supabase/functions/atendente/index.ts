@@ -10,6 +10,8 @@
 // Rotas:
 //   POST /varrer             (x-cron-secret)  processa mensagens novas      ?wait=1 espera o resultado
 //   POST /simular            (x-cron-secret)  {wa_id, agora?} decide sem enviar nem gravar
+//   GET  /contatos?q=        (administrador)  busca contatos por nome, empresa, assunto ou número
+//   POST /transcrever         (administrador)  áudio curto → texto (busca por voz)
 //   GET|POST /config         (administrador)  liga/desliga, espera, base de conhecimento, últimas decisões
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -412,6 +414,60 @@ async function config(req: Request) {
   return json({ config: c, ultimas: (ult ?? []).map((x) => ({ ...x, nome: nomes.get(x.wa_id) ?? null })) });
 }
 
+// ---------------------------------------------------------------- busca de contatos (app) e transcrição para busca por voz
+const semAcento = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+async function buscarContatos(q: string) {
+  const termo = semAcento(q).replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
+  if (!termo) return [];
+  const digitos = q.replace(/\D/g, '');
+  const palavras = termo.split(/\s+/).filter((p) => p.length >= 2 && !/^\d+$/.test(p));
+  const [{ data: cs }, { data: ps }] = await Promise.all([
+    db.from('contacts').select('wa_id, name, muted, last_seen, awaiting_reply, last_summary').order('last_seen', { ascending: false }).limit(3000),
+    db.from('contato_perfil').select('wa_id, nome, empresa, relacao, resumo').limit(3000),
+  ]);
+  const perfil = new Map((ps ?? []).map((p) => [p.wa_id, p]));
+  const achados: { c: Record<string, unknown>; pontos: number }[] = [];
+  for (const c of cs ?? []) {
+    if (c.name === '[teste removido]') continue;
+    const p = perfil.get(c.wa_id);
+    const nome = semAcento(String(c.name ?? p?.nome ?? ''));
+    const empresa = semAcento(String(p?.empresa ?? ''));
+    const resto = semAcento(`${p?.resumo ?? ''} ${p?.relacao ?? ''} ${c.last_summary ?? ''}`);
+    let pontos = 0;
+    if (digitos.length >= 4 && String(c.wa_id).includes(digitos)) pontos += 50;
+    if (palavras.length) {
+      let todas = true;
+      for (const w of palavras) {
+        if (nome.split(/\s+/).some((n) => n.startsWith(w))) pontos += 20;
+        else if (nome.includes(w)) pontos += 12;
+        else if (empresa.includes(w)) pontos += 10;
+        else if (resto.includes(w)) pontos += 3;
+        else todas = false;
+      }
+      if (!todas && !(digitos.length >= 4 && pontos >= 50)) continue;
+      if (nome === termo) pontos += 30;
+    }
+    if (pontos > 0) achados.push({ c: { ...c, empresa: p?.empresa ?? null, relacao: p?.relacao ?? null }, pontos });
+  }
+  return achados.sort((a, b) => b.pontos - a.pontos || Date.parse(String(b.c.last_seen)) - Date.parse(String(a.c.last_seen))).slice(0, 30).map((x) => x.c);
+}
+async function transcrever(audio: Blob, tipo: string) {
+  const cab = new Uint8Array(await audio.slice(0, 16).arrayBuffer());
+  const txt = String.fromCharCode(...cab);
+  const ext = txt.slice(4, 8) === 'ftyp' ? 'm4a' : cab[0] === 0x1a && cab[1] === 0x45 ? 'webm' : txt.startsWith('RIFF') ? 'wav' : txt.startsWith('OggS') ? 'ogg' : /webm/.test(tipo) ? 'webm' : 'm4a';
+  for (const modelo of ['whisper-1', 'gpt-4o-mini-transcribe']) {
+    const f = new FormData();
+    f.append('file', new File([audio], `busca.${ext}`, { type: ext === 'm4a' ? 'audio/mp4' : tipo || 'audio/webm' }));
+    f.append('model', modelo);
+    f.append('language', 'pt');
+    f.append('prompt', 'Nome de um contato, empresa ou número de telefone.');
+    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${await seg('OPENAI_API_KEY')}` }, body: f });
+    if (r.ok) return String((await r.json()).text ?? '').trim();
+    console.warn('[busca-voz]', modelo, r.status, (await r.text()).slice(0, 200));
+  }
+  throw new Error('Não consegui entender o áudio. Toque e fale de novo.');
+}
+
 // ---------------------------------------------------------------- rotas
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -436,6 +492,15 @@ Deno.serve(async (req) => {
       for (const m of lista) { if (m.direction !== 'in') break; novas.unshift(m); }
       if (!novas.length) return json({ resultado: 'nada', motivo: 'a última mensagem não é do contato' });
       return json(await atender(waId, novas, { simular: true, agora }));
+    }
+    if (rota === '/contatos' || rota === '/transcrever') {
+      if (!(await ehAdmin(req))) return json({ erro: 'O WhatsApp está conectado só ao administrador.' }, 403);
+      if (rota === '/contatos') return json({ contatos: await buscarContatos(String(url.searchParams.get('q') ?? '').slice(0, 80)) });
+      const audio = await req.blob();
+      if (audio.size < 800) return json({ erro: 'Muito curto. Toque e fale de novo.' }, 400);
+      if (audio.size > 5e6) return json({ erro: 'Áudio longo demais para uma busca.' }, 400);
+      try { return json({ texto: await transcrever(audio, req.headers.get('content-type') ?? '') }); }
+      catch (e) { return json({ erro: (e as Error).message }, 422); }
     }
     if (rota === '/config') {
       if (!(await ehAdmin(req))) return json({ erro: 'Só o administrador configura o atendimento.' }, 403);
