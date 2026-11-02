@@ -25,6 +25,7 @@ O aplicativo (a tela do iPhone) fica em outro repositório, público: `michelder
 | `ycloud` | Recebe as mensagens do WhatsApp Business (YCloud) |
 | `agendador` | Marca reuniões pelo WhatsApp; quando não tem certeza, deixa rascunho para aprovação |
 | `atendente` | Bot de IA do WhatsApp: responde clientes e prospects se o Michelder não responder (10 min no expediente, ~1 min fora), nunca cita valores; na dúvida deixa rascunho. Código TypeScript legível. Liga/desliga em `atendente_config` ou nos Ajustes do app |
+| `tarefas` | Tarefas em funil (A fazer → Fazendo → Feito) por dia; adiar para o próximo dia útil; arquivar em vez de apagar. Código TypeScript legível |
 | `agenda` | Página pública em que o contato escolhe um horário livre (link com token) |
 | `oraculo` | Dossiê de empresas (cadastro, mercado, risco, sócios, abordagem), pesquisa por voz e empresas próximas |
 | `gravador` | Gravação de reuniões, ligações e notas: transcrição, quem falou, ata e perguntas |
