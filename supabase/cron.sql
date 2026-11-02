@@ -38,6 +38,9 @@ select cron.schedule('sc-memoria', '*/2 * * * *', $cmd$select public.invoke_work
 -- sc-mes  (0 11 1 * *)
 select cron.schedule('sc-mes', '0 11 1 * *', $cmd$select public.invoke_worker('monthly')$cmd$);
 
+-- sc-olho  (*/2 * * * *)  Olho de Deus: uma etapa da fila por chamada
+select cron.schedule('sc-olho', '*/2 * * * *', $cmd$select public.olho_ciclo()$cmd$);
+
 -- sc-oraculo  (*/2 * * * *)
 select cron.schedule('sc-oraculo', '*/2 * * * *', $cmd$select net.http_post(
   url := (select decrypted_secret from vault.decrypted_secrets where name = 'sc_PROJECT_URL') || '/functions/v1/oraculo/processar',

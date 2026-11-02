@@ -13,7 +13,7 @@ O aplicativo (a tela do iPhone) fica em outro repositório, público: `michelder
 | Pasta | Conteúdo |
 |---|---|
 | `supabase/functions/` | As 13 funções que estão no ar (código exato publicado em 01/11/2026) |
-| `supabase/migrations/` | As 25 migrações do banco, na ordem em que foram aplicadas |
+| `supabase/migrations/` | As migrações do banco (0001–0030), na ordem em que foram aplicadas |
 | `supabase/cron.sql` | As 17 tarefas automáticas (lembretes, alarmes, memória, Oráculo, Radar…) |
 
 ## As funções
@@ -25,7 +25,8 @@ O aplicativo (a tela do iPhone) fica em outro repositório, público: `michelder
 | `ycloud` | Recebe as mensagens do WhatsApp Business (YCloud) |
 | `agendador` | Marca reuniões pelo WhatsApp; quando não tem certeza, deixa rascunho para aprovação |
 | `atendente` | Bot de IA do WhatsApp: responde clientes e prospects se o Michelder não responder (10 min no expediente, ~1 min fora), nunca cita valores; na dúvida deixa rascunho. Código TypeScript legível. Liga/desliga em `atendente_config` ou nos Ajustes do app |
-| `tarefas` | Tarefas em funil (A fazer → Fazendo → Feito) por dia; adiar para o próximo dia útil; arquivar em vez de apagar. Código TypeScript legível |
+| `tarefas` | Tarefas em funil (A fazer → Fazendo → Feito) por dia; adiar para o próximo dia útil. Tarefas 2.0: prazo, projeto, área, empresa, repetição, subtarefas, anotações, histórico (gatilho `tarefas_auditar` no banco), lixeira com restauração e exclusão confirmada, sugestões a partir das conversas (`/sugerir`, cron `sc-tarefas-sugerir`; nunca cria sozinho). Código TypeScript legível + `regras.ts` testado |
+| `olho` | **Olho de Deus**: inteligência de mercado. Fila em etapas (pesquisar → extrair → analisar → gravar), cron `sc-olho` a cada 2 min; descoberta semanal de empresas, regulação e setor 1×/dia, cada empresa a cada 72 h. Perfil com 14 itens, classificação promessa × comprovação com evidências conferidas, alertas por nível, push a partir de "alto", memória do Dimy, sugestões de tarefa. Código legível + `logica.ts` testado |
 | `agenda` | Página pública em que o contato escolhe um horário livre (link com token) |
 | `oraculo` | Dossiê de empresas (cadastro, mercado, risco, sócios, abordagem), pesquisa por voz e empresas próximas |
 | `gravador` | Gravação de reuniões, ligações e notas: transcrição, quem falou, ata e perguntas |

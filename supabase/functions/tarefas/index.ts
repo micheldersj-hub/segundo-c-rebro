@@ -7,7 +7,18 @@
 //   POST /:id/adiar                 passa para o próximo dia útil
 //   POST /:id/arquivar              tira da lista (não apaga)
 //   POST /adiar-pendentes {dia}     passa tudo o que não foi feito no dia (e atrasadas) para o próximo dia útil
+// Tarefas 2.0 (acréscimos; as rotas acima continuam iguais):
+//   campos novos em criar/alterar: projeto, area, prazo, recorrencia, recorrencia_ate, empresa, contato_wa, oportunidade
+//   GET  /:id/detalhe                tarefa + subtarefas + histórico
+//   POST /:id/subtarefas {titulo}    POST /:id/subtarefas/:sid {titulo?, feita?}    POST /:id/subtarefas/:sid/apagar
+//   POST /:id/nota {texto}           registra uma anotação no histórico
+//   GET  /lixeira                    arquivadas (60 dias)   POST /:id/restaurar   POST /:id/excluir {confirmar:true}
+//   GET  /projetos                   projetos/áreas com contagem    GET /buscar?projeto=&q=&prazo=vencido
+//   GET  /sugestoes                  POST /sugestoes/:id/aceitar {dia?}   POST /sugestoes/:id/descartar
+//   POST /sugerir  (x-cron-secret)   lê conversas novas e sugere tarefas (nunca cria sozinho)
+// Histórico e recorrência ficam no banco (gatilho tarefas_auditar), valendo também para o Dimy e o Olho de Deus.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { chaveTarefa, normalizar, RECORRENCIAS, sugestaoAprovada } from './regras.ts';
 
 const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -19,16 +30,19 @@ const CORS = {
 };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
 const ETAPAS = ['a_fazer', 'fazendo', 'feito'];
-const CAMPOS = 'id, titulo, notas, dia, etapa, prioridade, ordem, adiada_vezes, dia_original, concluida_em, created_at';
+const CAMPOS = 'id, titulo, notas, dia, etapa, prioridade, ordem, adiada_vezes, dia_original, concluida_em, created_at, projeto, area, prazo, recorrencia, recorrencia_ate, empresa, contato_wa, oportunidade, origem';
 
 // ---------------------------------------------------------------- quem é
-let appKey: string | null = null;
-async function chaveApp() {
-  if (appKey) return appKey;
-  const { data } = await db.rpc('get_app_secrets');
-  appKey = String((data ?? {}).sc_APP_KEY ?? '');
-  return appKey;
+let segredos: Record<string, string> | null = null;
+async function seg(nome: string, padrao = '') {
+  if (!segredos) {
+    const { data } = await db.rpc('get_app_secrets');
+    segredos = {};
+    for (const [k, v] of Object.entries(data ?? {})) segredos[k.replace(/^sc_/, '')] = String(v);
+  }
+  return Deno.env.get(nome) ?? segredos[nome] ?? padrao;
 }
+const chaveApp = () => seg('APP_KEY');
 const igual = (a: string, b: string) => {
   if (!a || a.length !== b.length) return false;
   let d = 0;
@@ -84,13 +98,22 @@ async function listar(uid: string, dia: string) {
     db.from('tarefas').select('dia, etapa').eq('user_id', uid).eq('arquivada', false).gte('dia', somaDias(dia, -3)).lte('dia', ate),
   ]);
   if (doDia.error) throw doDia.error;
+  const todas = [...(doDia.data ?? []), ...(atrasadas.data ?? [])];
+  const [subs, prazos, sug] = await Promise.all([
+    todas.length ? db.from('tarefa_subtarefas').select('tarefa_id, feita').in('tarefa_id', todas.map((t) => t.id)) : Promise.resolve({ data: [] }),
+    db.from('tarefas').select(CAMPOS).eq('user_id', uid).eq('arquivada', false).neq('etapa', 'feito').not('prazo', 'is', null).lte('prazo', somaDias(hoje, 2)).order('prazo').limit(30),
+    db.from('tarefa_sugestoes').select('id', { count: 'exact', head: true }).eq('user_id', uid).eq('status', 'pendente'),
+  ]);
+  const progresso: Record<string, { total: number; feitas: number }> = {};
+  for (const x of subs.data ?? []) { const p = (progresso[x.tarefa_id] ??= { total: 0, feitas: 0 }); p.total++; if (x.feita) p.feitas++; }
+  for (const t of todas) (t as any).subtarefas = progresso[t.id] ?? null;
   const contagem: Record<string, { total: number; feitas: number }> = {};
   for (const t of proximos.data ?? []) {
     const c = (contagem[t.dia] ??= { total: 0, feitas: 0 });
     c.total++;
     if (t.etapa === 'feito') c.feitas++;
   }
-  return { dia, hoje, tarefas: doDia.data ?? [], atrasadas: atrasadas.data ?? [], contagem };
+  return { dia, hoje, tarefas: doDia.data ?? [], atrasadas: atrasadas.data ?? [], contagem, prazos: prazos.data ?? [], sugestoes_pendentes: sug.count ?? 0 };
 }
 
 function limpar(b: Record<string, unknown>) {
@@ -112,6 +135,18 @@ function limpar(b: Record<string, unknown>) {
     up.concluida_em = b.etapa === 'feito' ? new Date().toISOString() : null;
   }
   if (b.ordem !== undefined && Number.isFinite(Number(b.ordem))) up.ordem = Number(b.ordem);
+  for (const k of ['projeto', 'area', 'empresa', 'oportunidade']) if (b[k] !== undefined) up[k] = typeof b[k] === 'string' ? (b[k] as string).trim().slice(0, 80) || null : null;
+  if (b.contato_wa !== undefined) up.contato_wa = typeof b.contato_wa === 'string' ? b.contato_wa.replace(/[^\d@.a-z]/gi, '').slice(0, 60) || null : null;
+  for (const k of ['prazo', 'recorrencia_ate']) if (b[k] !== undefined) {
+    if (b[k] === null || b[k] === '') up[k] = null;
+    else if (!diaValido(b[k])) throw new Error('Data inválida.');
+    else up[k] = b[k];
+  }
+  if (b.recorrencia !== undefined) {
+    if (b.recorrencia === null || b.recorrencia === '') up.recorrencia = null;
+    else if (!RECORRENCIAS.includes(String(b.recorrencia) as any)) throw new Error('Repetição inválida.');
+    else up.recorrencia = b.recorrencia;
+  }
   return up;
 }
 
@@ -131,10 +166,93 @@ async function adiar(uid: string, ids: string[]) {
   return (data ?? []).length;
 }
 
+// ---------------------------------------------------------------- sugestões a partir das conversas
+async function claude(corpo: Record<string, unknown>) {
+  const chave = await seg('ANTHROPIC_API_KEY');
+  for (let t = 0; ; t++) {
+    const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify(corpo) });
+    if (r.ok) return await r.json();
+    const det = (await r.text()).slice(0, 200);
+    if ((r.status === 429 || r.status >= 500) && t < 2) { await new Promise((ok) => setTimeout(ok, 2000 * (t + 1))); continue; }
+    throw new Error(`IA ${r.status}: ${det}`);
+  }
+}
+const ESQ_SUG = {
+  type: 'object', properties: { candidatas: { type: 'array', items: { type: 'object', properties: {
+    evento: { type: 'integer', description: 'número da mensagem de onde saiu' },
+    titulo: { type: 'string', description: 'Tarefa no infinitivo, curta e específica (quem/o quê)' },
+    notas: { type: 'string', description: 'Contexto mínimo: quem pediu, o que foi combinado' },
+    acao_concreta: { type: 'boolean', description: 'Existe uma ação concreta a fazer?' },
+    compromisso: { type: 'boolean', description: 'Michelder assumiu um compromisso ou recebeu um pedido?' },
+    prazo: { type: 'string', description: 'YYYY-MM-DD se houver prazo explícito ou claramente implícito ("amanhã", "sexta")' },
+    exige_acompanhamento: { type: 'boolean', description: 'Precisa de acompanhamento (não é algo já resolvido na própria conversa)?' },
+    ja_existe: { type: 'boolean', description: 'Já está na lista de tarefas abertas?' },
+    confianca: { type: 'number', minimum: 0, maximum: 1 },
+    motivo: { type: 'string', description: 'Por que isso merece virar tarefa (1 frase)' },
+    projeto: { type: 'string' }, empresa: { type: 'string' },
+  }, required: ['evento', 'titulo', 'acao_concreta', 'compromisso', 'exige_acompanhamento', 'ja_existe', 'confianca', 'motivo'] } } },
+  required: ['candidatas'],
+};
+async function sugerir() {
+  const { data: est } = await db.from('tarefa_sugestor_estado').select('*').eq('id', 1).single();
+  const desde = est?.ultimo_evento ?? new Date(Date.now() - 864e5).toISOString();
+  const { data: evs } = await db.from('raw_events').select('id, user_id, source, content, occurred_at, created_at').in('source', ['app', 'whatsapp_eu', 'gravacao']).gt('created_at', desde).order('created_at').limit(40);
+  // sugestões paradas há 14 dias vencem (não ficam acumulando)
+  await db.from('tarefa_sugestoes').update({ status: 'vencida', decidido_em: new Date().toISOString() }).eq('status', 'pendente').lt('created_at', new Date(Date.now() - 14 * 864e5).toISOString());
+  if (!evs?.length) { await db.from('tarefa_sugestor_estado').update({ ultima_execucao: new Date().toISOString(), ultimo_resultado: 'nada novo' }).eq('id', 1); return { lidas: 0, sugeridas: 0 }; }
+  const porUsuario = new Map<string, typeof evs>();
+  for (const e of evs) if (e.user_id && (e.content ?? '').trim().length > 15) (porUsuario.get(e.user_id) ?? porUsuario.set(e.user_id, []).get(e.user_id)!).push(e);
+  let sugeridas = 0; const descartes: string[] = [];
+  for (const [uid, lista] of porUsuario) {
+    const [{ data: abertas }, { data: recentes }] = await Promise.all([
+      db.from('tarefas').select('titulo').eq('user_id', uid).eq('arquivada', false).neq('etapa', 'feito').limit(200),
+      db.from('tarefa_sugestoes').select('titulo').eq('user_id', uid).gte('created_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(200),
+    ]);
+    const existentes = [...(abertas ?? []), ...(recentes ?? [])].map((x) => x.titulo);
+    const fonte = { app: 'conversa com o Dimy', whatsapp_eu: 'mensagem que Michelder enviou no WhatsApp', gravacao: 'gravação de reunião' } as Record<string, string>;
+    const hoje = hojeSP();
+    const sys = `Você identifica tarefas reais nas conversas de Michelder (B2B PAY). Hoje é ${hoje} (${new Intl.DateTimeFormat('pt-BR', { weekday: 'long', timeZone: 'America/Sao_Paulo' }).format(new Date())}).
+Sugira uma tarefa SOMENTE quando houver ação concreta, compromisso assumido ou pedido recebido, ainda não resolvido na própria conversa e que precise de acompanhamento.
+NÃO sugira: conversa social, perguntas já respondidas, informações sem ação, coisas que o Dimy já fez (lembrete criado, mensagem enviada), nem nada que já esteja na lista de abertas.
+Na dúvida, não sugira. Prefira 0 a uma sugestão fraca.`;
+    const user = `TAREFAS ABERTAS E SUGESTÕES RECENTES (não repita):\n${existentes.slice(0, 120).map((t) => `- ${t}`).join('\n') || '(nenhuma)'}\n\nMENSAGENS NOVAS:\n${lista.map((e, i) => `${i}. [${fonte[e.source] ?? e.source} · ${String(e.occurred_at ?? e.created_at).slice(0, 16)}] ${String(e.content).slice(0, 1500)}`).join('\n')}`;
+    const tool = { name: 'sugerir_tarefas', description: 'Registra as tarefas candidatas (lista vazia se não houver).', input_schema: ESQ_SUG };
+    let x: any = null;
+    for (let t = 0; t < 2 && !x; t++) {
+      const r = await claude({ model: await seg('CLAUDE_CHAT_MODEL', 'claude-sonnet-5-5'), max_tokens: 3000, tools: [tool], tool_choice: { type: 'auto' }, system: `${sys}\n\nIMPORTANTE: responda exclusivamente chamando a ferramenta "sugerir_tarefas".`, messages: [{ role: 'user', content: user }] });
+      x = r.content?.find((b: any) => b.type === 'tool_use')?.input ?? null;
+    }
+    if (!x) { const r = await claude({ model: await seg('CLAUDE_FAST_MODEL', 'claude-haiku-4-5-20251001'), max_tokens: 3000, tools: [tool], tool_choice: { type: 'tool', name: 'sugerir_tarefas' }, system: sys, messages: [{ role: 'user', content: user }] }); x = r.content?.find((b: any) => b.type === 'tool_use')?.input ?? { candidatas: [] }; }
+    for (const c of (x.candidatas ?? []).slice(0, 10)) {
+      const ok = sugestaoAprovada(c, existentes);
+      if (!ok.ok) { descartes.push(`${String(c.titulo ?? '').slice(0, 40)}: ${ok.motivo}`); continue; }
+      const ev = lista[c.evento] ?? lista[0];
+      const prazo = diaValido(c.prazo) && c.prazo >= hoje ? c.prazo : null;
+      const { error } = await db.from('tarefa_sugestoes').insert({
+        user_id: uid, titulo: String(c.titulo).trim().slice(0, 200), notas: String(c.notas ?? '').slice(0, 800) || null, prazo, dia: prazo && prazo < somaDias(hoje, 7) ? prazo : null,
+        prioridade: prazo && prazo <= somaDias(hoje, 1) ? 1 : 2, projeto: c.projeto?.slice(0, 80) || null, empresa: c.empresa?.slice(0, 80) || null,
+        origem: 'conversa', origem_ref: ev.id, motivo: String(c.motivo ?? '').slice(0, 300),
+        criterios: { acao_concreta: !!c.acao_concreta, compromisso: !!c.compromisso, exige_acompanhamento: !!c.exige_acompanhamento, confianca: c.confianca, fonte: ev.source },
+        chave: chaveTarefa(c.titulo),
+      });
+      if (!error) { sugeridas++; existentes.push(c.titulo); }
+    }
+  }
+  const ultimo = evs[evs.length - 1].created_at;
+  const resumo = `${evs.length} mensagem(ns) lida(s), ${sugeridas} sugestão(ões)${descartes.length ? `; descartadas: ${descartes.slice(0, 5).join(' · ')}` : ''}`;
+  await db.from('tarefa_sugestor_estado').update({ ultimo_evento: ultimo, ultima_execucao: new Date().toISOString(), ultimo_resultado: resumo.slice(0, 1000) }).eq('id', 1);
+  console.log('[tarefas] sugerir:', resumo);
+  return { lidas: evs.length, sugeridas, descartes };
+}
+
 // ---------------------------------------------------------------- rotas
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   try {
+    if (new URL(req.url).pathname.endsWith('/sugerir')) {
+      if (!igual(req.headers.get('x-cron-secret') ?? '', await seg('CRON_SECRET'))) return json({ erro: 'forbidden' }, 403);
+      return json(await sugerir());
+    }
     const uid = await usuario(req);
     if (!uid) return json({ erro: 'Sessão expirada. Entre de novo.' }, 401);
     const url = new URL(req.url);
@@ -145,7 +263,65 @@ Deno.serve(async (req) => {
       const dia = diaValido(url.searchParams.get('dia')) ? url.searchParams.get('dia')! : hojeSP();
       return json(await listar(uid, dia));
     }
+    if (req.method === 'GET' && partes[0] === 'lixeira') {
+      const { data } = await db.from('tarefas').select(CAMPOS + ', arquivada_em, updated_at').eq('user_id', uid).eq('arquivada', true).gte('updated_at', new Date(Date.now() - 60 * 864e5).toISOString()).order('updated_at', { ascending: false }).limit(100);
+      return json({ tarefas: data ?? [] });
+    }
+    if (req.method === 'GET' && partes[0] === 'projetos') {
+      const { data } = await db.from('tarefas').select('projeto, area, etapa, prazo').eq('user_id', uid).eq('arquivada', false);
+      const hoje = hojeSP(), mapa: Record<string, { projeto: string; abertas: number; feitas: number; vencidas: number; areas: string[] }> = {};
+      for (const t of data ?? []) {
+        if (!t.projeto) continue;
+        const p = (mapa[t.projeto] ??= { projeto: t.projeto, abertas: 0, feitas: 0, vencidas: 0, areas: [] });
+        if (t.etapa === 'feito') p.feitas++; else { p.abertas++; if (t.prazo && t.prazo < hoje) p.vencidas++; }
+        if (t.area && !p.areas.includes(t.area)) p.areas.push(t.area);
+      }
+      const areas = [...new Set((data ?? []).map((t) => t.area).filter(Boolean))];
+      return json({ projetos: Object.values(mapa).sort((a, b) => b.abertas - a.abertas), areas });
+    }
+    if (req.method === 'GET' && partes[0] === 'buscar') {
+      const p = url.searchParams;
+      let q = db.from('tarefas').select(CAMPOS).eq('user_id', uid).eq('arquivada', false).order('dia').limit(200);
+      if (p.get('projeto')) q = q.eq('projeto', p.get('projeto'));
+      if (p.get('area')) q = q.eq('area', p.get('area'));
+      if (p.get('empresa')) q = q.ilike('empresa', `%${p.get('empresa')!.replace(/[%_]/g, '')}%`);
+      if (p.get('abertas') !== '0') q = q.neq('etapa', 'feito');
+      if (p.get('prazo') === 'vencido') q = q.lt('prazo', hojeSP());
+      const { data } = await q;
+      const termo = normalizar(p.get('q') ?? '');
+      return json({ tarefas: (data ?? []).filter((t) => !termo || normalizar(`${t.titulo} ${t.notas ?? ''} ${t.empresa ?? ''} ${t.projeto ?? ''}`).includes(termo)) });
+    }
+    if (req.method === 'GET' && partes[0] === 'sugestoes') {
+      const { data } = await db.from('tarefa_sugestoes').select('id, titulo, notas, dia, prazo, prioridade, projeto, empresa, contato_wa, origem, origem_ref, motivo, criterios, created_at').eq('user_id', uid).eq('status', 'pendente').order('created_at', { ascending: false }).limit(30);
+      return json({ sugestoes: data ?? [] });
+    }
+    if (req.method === 'GET' && partes[1] === 'detalhe' && /^[0-9a-f-]{36}$/.test(partes[0])) {
+      const [{ data: t }, { data: subs }, { data: hist }] = await Promise.all([
+        db.from('tarefas').select(CAMPOS + ', arquivada, recorrencia_origem').eq('id', partes[0]).eq('user_id', uid).maybeSingle(),
+        db.from('tarefa_subtarefas').select('id, titulo, feita, ordem').eq('tarefa_id', partes[0]).order('ordem'),
+        db.from('tarefa_historico').select('acao, detalhe, por, created_at').eq('tarefa_id', partes[0]).order('created_at', { ascending: false }).limit(50),
+      ]);
+      if (!t) return json({ erro: 'Tarefa não encontrada.' }, 404);
+      return json({ tarefa: t, subtarefas: subs ?? [], historico: hist ?? [] });
+    }
     if (req.method !== 'POST') return json({ erro: 'não encontrado' }, 404);
+
+    if (partes[0] === 'sugestoes' && partes[1] && ['aceitar', 'descartar'].includes(partes[2])) {
+      const { data: s } = await db.from('tarefa_sugestoes').select('*').eq('id', partes[1]).eq('user_id', uid).eq('status', 'pendente').maybeSingle();
+      if (!s) return json({ erro: 'Sugestão não encontrada (talvez já decidida).' }, 404);
+      if (partes[2] === 'descartar') {
+        await db.from('tarefa_sugestoes').update({ status: 'descartada', decidido_em: new Date().toISOString() }).eq('id', s.id);
+        return json({ ok: true });
+      }
+      const dia = diaValido(corpo.dia) ? corpo.dia : (s.dia && s.dia >= hojeSP() ? s.dia : hojeSP());
+      const { data: t, error } = await db.from('tarefas').insert({
+        user_id: uid, titulo: String(corpo.titulo ?? s.titulo).slice(0, 300), notas: [s.notas, s.motivo ? `Por quê: ${s.motivo}` : null].filter(Boolean).join('\n').slice(0, 2000) || null,
+        dia, prazo: s.prazo, prioridade: s.prioridade, projeto: s.projeto, empresa: s.empresa, contato_wa: s.contato_wa, origem: s.origem === 'olho' ? 'olho' : 'sugestao',
+      }).select(CAMPOS).single();
+      if (error) throw error;
+      await db.from('tarefa_sugestoes').update({ status: 'aceita', tarefa_id: t.id, decidido_em: new Date().toISOString() }).eq('id', s.id);
+      return json({ ok: true, tarefa: t });
+    }
 
     if (!partes.length) {
       const dados = limpar({ etapa: 'a_fazer', ...corpo });
@@ -170,8 +346,54 @@ Deno.serve(async (req) => {
       return json({ ok: n > 0, tarefa: data });
     }
     if (partes[1] === 'arquivar') {
-      await db.from('tarefas').update({ arquivada: true, updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', uid);
+      await db.from('tarefas').update({ arquivada: true, arquivada_em: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', uid);
       return json({ ok: true });
+    }
+    if (partes[1] === 'restaurar') {
+      const { data } = await db.from('tarefas').update({ arquivada: false, arquivada_em: null, updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', uid).select(CAMPOS).maybeSingle();
+      return data ? json({ ok: true, tarefa: data }) : json({ erro: 'Tarefa não encontrada.' }, 404);
+    }
+    if (partes[1] === 'excluir') {
+      // exclusão definitiva: só da lixeira e com confirmação explícita
+      if (corpo.confirmar !== true) return json({ erro: 'Confirme a exclusão definitiva.' }, 400);
+      const { data: t } = await db.from('tarefas').select('id, arquivada').eq('id', id).eq('user_id', uid).maybeSingle();
+      if (!t) return json({ erro: 'Tarefa não encontrada.' }, 404);
+      if (!t.arquivada) return json({ erro: 'Mande para a lixeira antes de excluir de vez.' }, 409);
+      await db.from('tarefas').delete().eq('id', id).eq('user_id', uid);
+      return json({ ok: true });
+    }
+    // dono da tarefa (para subtarefas e notas)
+    const dono = async () => !!(await db.from('tarefas').select('id').eq('id', id).eq('user_id', uid).maybeSingle()).data;
+    if (partes[1] === 'nota') {
+      const texto = String(corpo.texto ?? '').trim().slice(0, 1000);
+      if (!texto) return json({ erro: 'Escreva a anotação.' }, 400);
+      if (!(await dono())) return json({ erro: 'Tarefa não encontrada.' }, 404);
+      await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'nota', detalhe: texto, por: 'app' });
+      return json({ ok: true });
+    }
+    if (partes[1] === 'subtarefas') {
+      if (!(await dono())) return json({ erro: 'Tarefa não encontrada.' }, 404);
+      const sid = partes[2];
+      if (!sid) {
+        const titulo = String(corpo.titulo ?? '').trim().slice(0, 200);
+        if (!titulo) return json({ erro: 'Escreva a subtarefa.' }, 400);
+        const { data, error } = await db.from('tarefa_subtarefas').insert({ tarefa_id: id, titulo }).select('id, titulo, feita, ordem').single();
+        if (error) throw error;
+        await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `+ ${titulo}`, por: 'app' });
+        return json({ subtarefa: data });
+      }
+      if (!/^[0-9a-f-]{36}$/.test(sid)) return json({ erro: 'subtarefa inválida' }, 400);
+      if (partes[3] === 'apagar') {
+        const { data } = await db.from('tarefa_subtarefas').delete().eq('id', sid).eq('tarefa_id', id).select('titulo').maybeSingle();
+        if (data) await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `− ${data.titulo}`, por: 'app' });
+        return json({ ok: true });
+      }
+      const up: Record<string, unknown> = {};
+      if (typeof corpo.titulo === 'string' && corpo.titulo.trim()) up.titulo = corpo.titulo.trim().slice(0, 200);
+      if (typeof corpo.feita === 'boolean') up.feita = corpo.feita;
+      const { data } = await db.from('tarefa_subtarefas').update(up).eq('id', sid).eq('tarefa_id', id).select('id, titulo, feita, ordem').maybeSingle();
+      if (data && typeof corpo.feita === 'boolean') await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `${corpo.feita ? '✓' : '○'} ${data.titulo}`, por: 'app' });
+      return data ? json({ subtarefa: data }) : json({ erro: 'Subtarefa não encontrada.' }, 404);
     }
     if (partes.length === 1) {
       const up = limpar(corpo);
