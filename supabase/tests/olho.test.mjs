@@ -70,3 +70,13 @@ test('planejamento respeita o limite diário e o horário', () => {
   assert.ok(!L.planejar({ ...base, agora: madrugada }).some((x) => x.tipo === 'setor'));
   assert.equal(L.planejar({ ...base, agora: meioDia, feitasHoje: 5 }).length, 0, 'limite diário atingido');
 });
+
+test('mesmaEmpresa: une variações do mesmo nome sem juntar marcas diferentes', () => {
+  assert.equal(L.mesmaEmpresa('PagBank', 'PagBank (PagSeguro)'), true);
+  assert.equal(L.mesmaEmpresa('Stone', 'Stone (inclui Ton e Pagar.me)'), true);
+  assert.equal(L.mesmaEmpresa('Getnet Santander', 'Getnet (Santander)'), true);
+  assert.equal(L.mesmaEmpresa('Rede Payments', 'Rede (Itaú)'), false);   // "rede" é curto demais para unir
+  assert.equal(L.mesmaEmpresa('Cielo', 'Cielo Pay'), true);
+  assert.equal(L.mesmaEmpresa('Asaas', 'Dock'), false);
+  assert.equal(L.mesmaEmpresa('', 'Dock'), false);
+});

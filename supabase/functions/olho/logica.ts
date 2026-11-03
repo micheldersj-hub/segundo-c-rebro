@@ -135,3 +135,14 @@ export function planejar(p: {
   for (const e of p.empresasVencidas.slice(0, 3)) add({ tipo: 'empresa', empresa_id: e.id });
   return fila;
 }
+
+/** Nome sem o que vem entre parênteses ("PagBank (PagSeguro)" → "pagbank"). */
+export const nomeBase = (n: unknown) => normalizar(String(n ?? '').replace(/\([^)]*\)/g, ' '));
+/** Mesma empresa escrita de jeitos diferentes? Igual sem parênteses, ou um nome (5+ letras) contido como palavra inteira no outro. */
+export function mesmaEmpresa(a: unknown, b: unknown): boolean {
+  const x = nomeBase(a), y = nomeBase(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [curto, longo] = x.length < y.length ? [x, y] : [y, x];
+  return curto.length >= 5 && ` ${longo} `.includes(` ${curto} `);
+}

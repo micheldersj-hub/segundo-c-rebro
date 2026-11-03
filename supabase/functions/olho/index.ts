@@ -16,7 +16,7 @@
 // Rotas internas (x-cron-secret): POST /ciclo (?wait=1 roda a etapa e devolve o resultado)
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
-  atinge, chaveMovimento, CAMPOS_PERFIL, conferirEvidencias, dataValida, deveAlertar, diffPerfil, ehDuplicado, hojeSP,
+  atinge, chaveMovimento, CAMPOS_PERFIL, conferirEvidencias, dataValida, deveAlertar, diffPerfil, ehDuplicado, hojeSP, mesmaEmpresa,
   nivelValido, normalizar, pesoNivel, planejar, ROTULOS_CLASSIFICACAO, slug, textoDaPagina, urlLimpa,
 } from './logica.ts';
 
@@ -360,7 +360,8 @@ async function passoAnalisar(ex: Exec, cfg: any) {
 async function acharOuCriarEmpresa(nome: string | undefined, origemTexto: string) {
   if (!nome || normalizar(nome).length < 2) return null;
   const s = slug(nome);
-  const { data } = await db.from('olho_empresas').select('id, nome, silenciada, categoria').eq('slug', s).maybeSingle();
+  const { data: todas } = await db.from('olho_empresas').select('id, nome, slug, silenciada, categoria').limit(1000);
+  const data = (todas ?? []).find((e) => e.slug === s || mesmaEmpresa(e.nome, nome));
   if (data) return data;
   const { data: nova } = await db.from('olho_empresas').insert({ nome: nome.slice(0, 120), slug: s, categoria: 'candidata', origem: 'movimento', motivo_inclusao: origemTexto.slice(0, 300), proxima_em: new Date(Date.now() + 3600e3).toISOString() }).select('id, nome, silenciada, categoria').single();
   return nova;
@@ -371,10 +372,12 @@ async function passoGravar(ex: Exec, cfg: any) {
   let novidades = 0;
   if (ex.tipo === 'descoberta') {
     const vistas = new Set((d.fontes ?? []).map((f: any) => urlLimpa(f.url)).filter(Boolean));
+    const { data: todas } = await db.from('olho_empresas').select('nome, slug').limit(1000);
+    const nomes = (todas ?? []).map((x) => x.nome), slugs = new Set((todas ?? []).map((x) => x.slug));
     for (const e of d.empresas ?? []) {
       const s = slug(e.nome); if (!s) continue;
-      const { data: ja } = await db.from('olho_empresas').select('id').eq('slug', s).maybeSingle();
-      if (ja) continue;
+      if (slugs.has(s) || nomes.some((n) => mesmaEmpresa(n, e.nome))) continue;   // mesma empresa escrita de outro jeito
+      nomes.push(e.nome); slugs.add(s);
       const site = urlLimpa(e.site);
       await db.from('olho_empresas').insert({ nome: e.nome.slice(0, 120), slug: s, site, segmentos: (e.segmentos ?? []).slice(0, 8), categoria: e.categoria === 'concorrente' ? 'concorrente' : 'similar', origem: 'descoberta', motivo_inclusao: String(e.motivo ?? '').slice(0, 500) + (site && !vistas.has(site) ? ' (site a confirmar)' : ''), proxima_em: new Date(Date.now() + novidades * 1800e3).toISOString() });
       novidades++;
@@ -593,8 +596,9 @@ async function rotas(req: Request, rota: string, url: URL, q: Quem) {
     const nome = String(corpo.nome ?? '').trim().slice(0, 120);
     if (nome.length < 2) return json({ erro: 'Informe o nome da empresa.' }, 400);
     const s = slug(nome);
-    const { data: ja } = await db.from('olho_empresas').select('id').eq('slug', s).maybeSingle();
-    if (ja) return json({ erro: 'Essa empresa já está no radar.', id: ja.id }, 409);
+    const { data: todas } = await db.from('olho_empresas').select('id, nome, slug').limit(1000);
+    const ja = (todas ?? []).find((e) => e.slug === s || mesmaEmpresa(e.nome, nome));
+    if (ja) return json({ erro: `Essa empresa já está no radar (${ja.nome}).`, id: ja.id }, 409);
     const cat = ['concorrente', 'similar'].includes(corpo.categoria) ? corpo.categoria : 'candidata';
     const { data, error } = await db.from('olho_empresas').insert({ nome, slug: s, site: urlLimpa(corpo.site), categoria: cat, origem: 'manual', motivo_inclusao: 'Incluída por você', proxima_em: new Date().toISOString() }).select('id').single();
     if (error) return json({ erro: error.message }, 400);
