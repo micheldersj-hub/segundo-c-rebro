@@ -9,3 +9,4 @@
 - Mudanças no banco: migração nova e aditiva em `supabase/migrations/`. Evite DELETE/DROP sem aprovação do dono.
 - Regras do dono: não enviar WhatsApp em nome dele fora do fluxo do agendador sem pedir; WhatsApp e base de contatos são só do administrador (`ehDono`).
 - O app (frontend) fica em `micheldersj-hub/segundo-cerebro-app` (GitHub Pages); a versão fica em `VERSAO` (app.js), `CACHE` (sw.js) e `?v=` (index.html).
+- Consumo de IA (0032–0034, função `consumo`): toda função que chama a Anthropic grava o `usage` em `ia_consumo` via `__usoIA` (bloco no fim de cada `index.ts`). Já publicadas com medição: worker, extra, ycloud, documento. As demais (app, olho, tarefas, atendente, agendador, oraculo, gravador, instagram) já têm o bloco no repositório e passam a medir na próxima publicação. Temporizadores: `ia_temporizadores` + `ia_aplicar_temporizador` (altera o cron). Função `ia-teste` é um stub desativado (410).

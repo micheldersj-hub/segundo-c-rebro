@@ -72,7 +72,7 @@ async function messages(body) {
       headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify(body)
     });
-    if (res.ok) return await res.json();
+    if(res.ok){const __j=await res.json();__usoIA(__j);return __j}
     const detail = await res.text();
     if ((res.status === 429 || res.status >= 500) && attempt < 2) {
       await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
@@ -386,3 +386,18 @@ Deno.serve(async (req) => {
   }
   return text("ok");
 });
+
+// ---- consumo de IA (0032): grava tokens e buscas de cada chamada bem-sucedida em ia_consumo; nunca bloqueia nem quebra a chamada.
+import { AsyncLocalStorage as __IA_ALS } from "node:async_hooks";
+var __iaCtx = new __IA_ALS();
+function __usoIA(j) {
+  try {
+    const u = j && j.usage; if (!u) return;
+    const url = Deno.env.get("SUPABASE_URL"), k = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"); if (!url || !k) return;
+    const st = u.server_tool_use || {};
+    const p = fetch(url + "/rest/v1/ia_consumo", { method: "POST", headers: { apikey: k, Authorization: "Bearer " + k, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ funcao: "instagram", tarefa: (__iaCtx && __iaCtx.getStore()) || null, modelo: String(j.model || ""), entrada: u.input_tokens || 0, saida: u.output_tokens || 0,
+        cache_escrita: u.cache_creation_input_tokens || 0, cache_leitura: u.cache_read_input_tokens || 0, buscas: st.web_search_requests || 0 }) }).catch(() => {});
+    try { globalThis.EdgeRuntime?.waitUntil?.(p); } catch { /* sem waitUntil */ }
+  } catch { /* nunca atrapalha */ }
+}

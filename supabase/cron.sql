@@ -25,6 +25,8 @@ select cron.schedule('sc-lembretes', '* * * * *', $cmd$select public.invoke_work
 
 -- sc-recuperar-credito  (*/30 * * * *)  devolve tentativas barradas por falta de crédito da IA e refaz o Radar
 select cron.schedule('sc-recuperar-credito', '*/30 * * * *', $cmd$select public.recuperar_falhas_credito()$cmd$);
+-- sc-consumo  (7,37 * * * *)  confere crédito de IA: avisos, economia automática e relatório oficial (função consumo)
+select cron.schedule('sc-consumo', '7,37 * * * *', $cmd$select public.ia_verificar()$cmd$);
 
 -- sc-tarefas-sugerir  (*/20 * * * *)  sugestões de tarefa a partir das conversas
 select cron.schedule('sc-tarefas-sugerir', '*/20 * * * *', $cmd$select public.tarefas_sugerir()$cmd$);

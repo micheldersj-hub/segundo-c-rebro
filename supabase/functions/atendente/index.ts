@@ -70,7 +70,7 @@ async function claude(corpo: Record<string, unknown>): Promise<any> {
       headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body,
     });
-    if (r.ok) return await r.json();
+    if(r.ok){const __j=await r.json();__usoIA(__j);return __j}
     const det = await r.text();
     if ((r.status === 429 || r.status >= 500) && t < 2) { await new Promise((ok) => setTimeout(ok, 1500 * (t + 1))); continue; }
     throw new Error(`Claude ${r.status}: ${det.slice(0, 300)}`);
@@ -512,3 +512,18 @@ Deno.serve(async (req) => {
     return json({ erro: (e as Error).message }, 500);
   }
 });
+
+// ---- consumo de IA (0032): grava tokens e buscas de cada chamada bem-sucedida em ia_consumo; nunca bloqueia nem quebra a chamada.
+import { AsyncLocalStorage as __IA_ALS } from "node:async_hooks";
+var __iaCtx = new __IA_ALS();
+function __usoIA(j) {
+  try {
+    const u = j && j.usage; if (!u) return;
+    const url = Deno.env.get("SUPABASE_URL"), k = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"); if (!url || !k) return;
+    const st = u.server_tool_use || {};
+    const p = fetch(url + "/rest/v1/ia_consumo", { method: "POST", headers: { apikey: k, Authorization: "Bearer " + k, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ funcao: "atendente", tarefa: (__iaCtx && __iaCtx.getStore()) || null, modelo: String(j.model || ""), entrada: u.input_tokens || 0, saida: u.output_tokens || 0,
+        cache_escrita: u.cache_creation_input_tokens || 0, cache_leitura: u.cache_read_input_tokens || 0, buscas: st.web_search_requests || 0 }) }).catch(() => {});
+    try { globalThis.EdgeRuntime?.waitUntil?.(p); } catch { /* sem waitUntil */ }
+  } catch { /* nunca atrapalha */ }
+}

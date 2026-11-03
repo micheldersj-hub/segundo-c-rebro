@@ -32,6 +32,7 @@ O aplicativo (a tela do iPhone) fica em outro repositório, público: `michelder
 | `gravador` | Gravação de reuniões, ligações e notas: transcrição, quem falou, ata e perguntas |
 | `documento` | Botão de anexar: o Dimy lê PDF, imagem, planilha, texto, áudio e vídeo |
 | `extra` | Base de conhecimento dos contatos, Radar diário e envio de arquivos (WhatsApp/e-mail) |
+| `consumo` | **Configuração / crédito de IA**: consumo medido de cada chamada à Anthropic (`ia_consumo`, preços em `ia_precos`), saldo estimado (o dono informa o saldo; "Conferir saldo" calibra), ritmo diário, dias restantes, temporizadores das rotinas (`ia_temporizadores` → altera o cron), modos Completo/Equilibrado/Econômico/Mínimo, avisos e economia automática (cron `sc-consumo`), relatório oficial opcional com chave de administrador da Anthropic (no Vault). Código legível + `logica.ts` testado |
 | `equipe` | Acesso da equipe de vendas (convites e links de entrada) |
 | `google-oauth` | Conexão com Google Agenda e Gmail |
 | `instagram` | Webhook do Instagram (DMs e comentários) |
