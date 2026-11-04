@@ -1,5 +1,6 @@
 name: iOS — verificação
 on:
+  workflow_dispatch:
   push:
     paths: ['ios/**', '.github/workflows/ios-ci.yml']
   pull_request:

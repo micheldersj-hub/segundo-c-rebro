@@ -3,7 +3,7 @@ import { ErroApi } from '@/lib/erros';
 
 const respostas: { status: number; corpo: unknown }[] = [];
 const chamadas: { url: string; init: RequestInit }[] = [];
-global.fetch = jest.fn(async (url: string, init: RequestInit) => {
+globalThis.fetch = jest.fn(async (url: string, init: RequestInit) => {
   chamadas.push({ url, init });
   const r = respostas.shift() ?? { status: 200, corpo: {} };
   return { ok: r.status < 400, status: r.status, json: async () => r.corpo } as Response;
@@ -35,7 +35,7 @@ describe('cliente da API', () => {
     expect(expirou).toHaveBeenCalled();
   });
   it('falha de rede vira ErroApi status 0', async () => {
-    (global.fetch as jest.Mock).mockImplementationOnce(async () => { throw new TypeError('Network request failed'); });
+    (globalThis.fetch as jest.Mock).mockImplementationOnce(async () => { throw new TypeError('Network request failed'); });
     await expect(api('/hoje')).rejects.toMatchObject({ status: 0 });
   });
 });
