@@ -1,0 +1,36 @@
+# Cria a base do app iOS (Expo) com versões compatíveis entre si e envia para o branch ios-base.
+# Disparo manual. Não publica nada nem gera custo.
+name: iOS — criar base Expo
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Criar projeto Expo (TypeScript + Expo Router)
+        run: |
+          rm -rf ios
+          npx --yes create-expo-app@latest ios --template default --yes
+          cd ios
+          npx --yes expo install @supabase/supabase-js expo-secure-store expo-local-authentication expo-notifications expo-device \
+            expo-audio expo-speech expo-haptics expo-location expo-image-picker expo-document-picker expo-print expo-sharing \
+            expo-web-browser expo-clipboard expo-keep-awake @react-native-async-storage/async-storage @react-native-community/netinfo \
+            react-native-svg react-native-url-polyfill
+          npm install --save @tanstack/react-query @tanstack/react-query-persist-client @tanstack/query-async-storage-persister
+          npx --yes expo install -- --save-dev jest-expo jest @testing-library/react-native @types/jest
+          npx --yes expo-doctor || true
+          rm -rf node_modules .git
+      - name: Enviar para o branch ios-base
+        run: |
+          git config user.name "dimy-bot"; git config user.email "dimy-bot@users.noreply.github.com"
+          git checkout -b ios-base
+          git add ios
+          git commit -m "iOS: base Expo gerada pelo create-expo-app com dependências compatíveis"
+          git push -f origin ios-base
