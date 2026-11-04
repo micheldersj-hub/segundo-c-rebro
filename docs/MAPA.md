@@ -3,19 +3,19 @@
 ## Funções — tamanho e tipo
 | Função | Bytes | Tipo | Chama IA | Mede consumo publicado |
 |---|---:|---|---|---|
-| app | 122k | minificado | sim | não (bloco no repo) |
+| app | 122k | minificado | sim | **sim** |
 | worker | 58k | minificado | sim (memória, resumos) | **sim** |
-| olho | 58k | TS legível + `logica.ts` | sim (web) | não |
-| oraculo | 55k | minificado | sim (web) | não |
-| agendador | 44k | minificado | sim | não |
+| olho | 58k | TS legível + `logica.ts` | sim (web) | **sim** |
+| oraculo | 55k | minificado | sim (web) | **sim** |
+| agendador | 44k | minificado | sim | **sim** |
 | extra | 41k | minificado | sim (Radar, perfis) | **sim** |
-| gravador | 40k | minificado | sim | não |
-| atendente | 37k | TS legível | sim | não |
-| tarefas | 29k | TS legível + `regras.ts` | sim | não |
+| gravador | 40k | minificado | sim | **sim** |
+| atendente | 37k | TS legível | sim | **sim** |
+| tarefas | 29k | TS legível + `regras.ts` | sim | **sim** |
 | ycloud | 27k | minificado | sim (triagem, memória) | **sim** |
 | agenda | 25k | minificado | não | — |
 | consumo | 23k | TS legível + `logica.ts` | não | — |
-| instagram | 19k | TS | sim | não |
+| instagram | 19k | TS | sim | **sim** |
 | google-oauth | 11k | minificado | não | — |
 | documento | 11k | minificado | sim | **sim** |
 | equipe | 7k | minificado | não | — |

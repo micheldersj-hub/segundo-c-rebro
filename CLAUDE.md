@@ -13,7 +13,7 @@ Antes de agir: leia `docs/ESTADO.md` (o que já foi feito e o que está pendente
 - `functions/*/index.ts` minificados = bundle publicado (fonte original perdido). Patch cirúrgico + `node --check` numa cópia `.mjs`.
 - Publicar: workflow `Publicar funções` (GitHub Actions, sem colar código) quando o segredo `SUPABASE_ACCESS_TOKEN` existir no GitHub;
   senão MCP `deploy_edge_function` (cola o arquivo inteiro: caro, use só para arquivos pequenos ou urgência).
-- Medição de consumo: bloco `__usoIA` no fim de cada função que chama a Anthropic (ver `docs/ESTADO.md` para quais já estão publicadas).
+- Medição de consumo: bloco `__usoIA` no fim de cada função que chama a Anthropic (todas publicadas com ele desde 03/11).
 
 ## Economia de contexto (obrigatório)
 - Não leia bundle inteiro: `grep -o '.\{200\}TRECHO.\{300\}'` ou Read com offset/limit. Mapa de tamanhos em `docs/MAPA.md`.
