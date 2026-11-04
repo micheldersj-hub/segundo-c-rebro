@@ -1,46 +1,70 @@
 {
   "expo": {
-    "name": "ios",
-    "slug": "ios",
+    "name": "Dimy",
+    "slug": "dimy",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "ios",
+    "scheme": "dimy",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "br.com.b2bpay.dimy",
+      "supportsTablet": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "web": {
-      "output": "server",
-      "favicon": "./assets/images/favicon.png"
+      "output": "single"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#0E9384",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
       ],
       "expo-secure-store",
-      "expo-audio",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "O Dimy usa o Face ID para proteger seus dados ao abrir o app."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "O Dimy usa o microfone para comandos de voz e para gravar reuniões.",
+          "enableBackgroundRecording": true
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "O Dimy usa sua localização para mostrar empresas por perto."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "O Dimy usa suas fotos quando você anexa uma imagem.",
+          "cameraPermission": "O Dimy usa a câmera para fotografar documentos e quadros nas reuniões."
+        }
+      ],
+      "expo-notifications",
       "expo-sharing",
       "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "platforms": [
+      "ios"
+    ]
   }
 }

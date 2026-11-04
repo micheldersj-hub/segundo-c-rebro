@@ -1,0 +1,33 @@
+name: iOS — verificação
+on:
+  push:
+    paths: ['ios/**', '.github/workflows/ios-ci.yml']
+  pull_request:
+    paths: ['ios/**']
+permissions:
+  contents: read
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ios/package-lock.json
+      - run: npm ci
+      - name: Tipos (TypeScript estrito)
+        run: npx tsc --noEmit
+      - name: Testes
+        run: npx jest --ci
+      - name: Configuração do app (plugins e permissões)
+        run: npx expo config --type introspect > /dev/null
+      - name: Saúde das dependências
+        run: npx expo-doctor
+      - name: Pacote JavaScript do iOS compila
+        run: npx expo export --platform ios --output-dir /tmp/dimy-export
