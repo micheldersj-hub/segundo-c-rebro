@@ -37,6 +37,6 @@ jobs:
         run: |
           for f in $FUNCOES; do
             echo "::group::$f"
-            supabase functions deploy "$f" --project-ref "$PROJETO" --no-verify-jwt
+            supabase functions deploy "$f" --project-ref "$PROJETO" --no-verify-jwt --yes
             echo "::endgroup::"
           done
