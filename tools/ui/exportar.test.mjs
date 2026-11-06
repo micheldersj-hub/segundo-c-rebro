@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const APP = process.env.APP_DIR || new URL('../../../segundo-cerebro-app', import.meta.url).pathname;
 const X = await import(join(APP, 'exportar.js'));
-const { jsPDF } = createRequire(import.meta.url)(join(APP, 'vendor/jspdf-2.5.1.umd.min.js'));
+const { jsPDF } = createRequire(import.meta.url)(join(APP, 'vendor/jspdf-4.2.1.umd.min.js'));
 const dir = mkdtempSync(join(tmpdir(), 'exp-'));
 const texto = (buf, nome) => { const f = join(dir, nome); writeFileSync(f, Buffer.from(buf)); return { f, txt: execFileSync('pdftotext', ['-layout', f, '-']).toString(), paginas: +execFileSync('pdfinfo', [f]).toString().match(/Pages:\s+(\d+)/)[1] }; };
 const empresa = (i, extra = {}) => ({ nome: `Padaria São João ${i}`, categoria: 'Panificação', distancia_m: 120 + i * 37, endereco: `Rua Turmalina ${i}, Betim, CEP 32641-832`, telefone: '(31) 3333-44' + String(i % 100).padStart(2, '0'), site: `https://padaria${i}.com.br`, motivo: 'Segmento próximo, faturamento alinhado', lat: -19.9, lng: -44.1, ...extra });
