@@ -4,3 +4,4 @@ Precisam do repositório do app ao lado deste (`../segundo-cerebro-app`) ou `APP
   `ESCURO=1` para o tema escuro. Respostas do servidor vêm de `fx/<funcao>_<caminho>.json` (dados de teste).
 - `node interacao_config.mjs` — clica na aba Configuração e confere as chamadas.
 - `node teclado.mjs` — simula o teclado do iPhone e confere a barra de baixo.
+- `node interacao_envio.mjs` — folha "Enviar no WhatsApp": lista de contatos, busca, regra das 24 h e o carregador do PDF em 3 formatos (`LARG=320 ESCURO=1`).
