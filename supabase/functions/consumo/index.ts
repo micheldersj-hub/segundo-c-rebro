@@ -14,8 +14,11 @@
 //   POST /temporizador  { rotina, opcao }
 //   POST /preset        { preset }
 //   POST /chave-admin   { chave }   (vazio remove)
-// Rota interna (x-cron-secret): POST /verificar — confere alertas, economia automática e o relatório oficial.
+//   POST /chave         { servico: anthropic|openai|ycloud, chave }  — testa no fornecedor ANTES de gravar no cofre
+//   POST /chaves-testar — confere todas as conexões agora
+// Rotas internas (x-cron-secret): POST /verificar (crédito, a cada 30 min) e POST /chaves-verificar (conexões, a cada 10 min).
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { avisosDasChaves, formatoValido, lerAnthropic, lerGoogle, lerMeta, lerOpenAI, lerYCloud, NOME_SEGREDO, proximoEstado, SERVICOS, validadeDaChave } from './chaves.ts';
 import { avisosDevidos, diasRestantes, gastoDiaRotina, estimarOpcao, fatorPorOficial, fatorPorSaldo, FUNCOES_IA, PRESETS, presetAtual, ritmoCom, ritmoDiario, somarRelatorio } from './logica.ts';
 
 const URL_BASE = Deno.env.get('SUPABASE_URL')!;
@@ -167,6 +170,7 @@ async function montarPainel() {
       economia_auto: c.economia_auto, economia_auto_usd: Number(c.economia_auto_usd) },
     oficial: { ativo: !!temChave, total_30d: d.oficial_30d, atualizado_em: c.oficial_em, erro: c.oficial_erro },
     precos: d.precos,
+    chaves: await painelChaves(),
   };
 }
 
@@ -259,6 +263,116 @@ async function verificar() {
   return res;
 }
 
+// ---------------------------------------------------------------- saúde das chaves (a cada 10 min, sem gastar crédito)
+// Cada serviço é conferido com uma chamada que não consome IA. Falha clara (chave recusada/vencida) avisa na hora;
+// instabilidade só derruba depois de 3 conferências seguidas. Quando Anthropic e OpenAI voltam, as mensagens que
+// falharam por chave são devolvidas à memória sozinhas. A validade da chave da Anthropic vem da Admin API (se houver).
+async function conferir(url: string, init: RequestInit = {}) {
+  try {
+    const r = await fetch(url, { ...init, signal: AbortSignal.timeout(12000) });
+    return { status: r.status, corpo: (await r.text()).slice(0, 4000) };
+  } catch { return { status: 0, corpo: '' }; }
+}
+async function leituras() {
+  const s = await segs(true);
+  const out: Record<string, any> = {};
+  const tarefas: Promise<void>[] = [];
+  const chaveIA = Deno.env.get('ANTHROPIC_API_KEY') ?? s.ANTHROPIC_API_KEY ?? '';
+  tarefas.push((async () => {
+    if (!chaveIA) { out.anthropic = { ok: false, detalhe: 'Sem chave da Anthropic.' }; return; }
+    const r = await conferir('https://api.anthropic.com/v1/models?limit=1', { headers: { 'x-api-key': chaveIA, 'anthropic-version': '2023-06-01' } });
+    out.anthropic = lerAnthropic(r.status, r.corpo);
+  })());
+  if (s.ANTHROPIC_ADMIN_KEY) tarefas.push((async () => {
+    const r = await conferir('https://api.anthropic.com/v1/organizations/api_keys?limit=100&status=active', { headers: { 'x-api-key': s.ANTHROPIC_ADMIN_KEY, 'anthropic-version': '2023-06-01' } });
+    if (r.status === 200) {
+      let lista: any[] = []; try { lista = JSON.parse(r.corpo).data ?? []; } catch { /* */ }
+      const v = validadeDaChave(lista, chaveIA);
+      out.anthropic_admin = { ok: true, detalhe: v.achou ? (v.expira_em ? 'Funcionando' : 'Funcionando · a chave da IA não vence') : 'Funcionando · não achei a chave da IA nesta organização' };
+      out._validade = v;
+    } else out.anthropic_admin = r.status === 401 || r.status === 403 ? { ok: false, detalhe: 'A chave de administrador foi recusada (vencida ou apagada).' } : { ok: null, detalhe: `Sem resposta (${r.status || '—'}).` };
+  })());
+  const chaveOA = Deno.env.get('OPENAI_API_KEY') ?? s.OPENAI_API_KEY ?? '';
+  tarefas.push((async () => {
+    if (!chaveOA) { out.openai = { ok: false, detalhe: 'Sem chave da OpenAI.' }; return; }
+    // embeddings de 1 palavra: confere chave, permissão e crédito (custo ~US$ 0,000001)
+    const r = await conferir('https://api.openai.com/v1/embeddings', { method: 'POST', headers: { Authorization: `Bearer ${chaveOA}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'text-embedding-3-small', input: 'ok' }) });
+    out.openai = lerOpenAI(r.status, r.corpo);
+  })());
+  if (s.YCLOUD_API_KEY) tarefas.push((async () => {
+    const r = await conferir('https://api.ycloud.com/v2/balance', { headers: { 'X-API-Key': s.YCLOUD_API_KEY } });
+    out.ycloud = lerYCloud(r.status, r.corpo);
+  })());
+  if (s.WA_ACCESS_TOKEN && s.META_APP_ID && s.META_APP_SECRET) tarefas.push((async () => {
+    const u = new URL('https://graph.facebook.com/v21.0/debug_token');
+    u.searchParams.set('input_token', s.WA_ACCESS_TOKEN); u.searchParams.set('access_token', `${s.META_APP_ID}|${s.META_APP_SECRET}`);
+    const r = await conferir(u.toString());
+    out.meta = lerMeta(r.status, r.corpo);
+  })());
+  tarefas.push((async () => {
+    const { data } = await db.from('oauth_accounts').select('updated_at').eq('provider', 'google').order('updated_at', { ascending: false }).limit(1).maybeSingle();
+    out.google = lerGoogle(data?.updated_at ?? null);
+  })());
+  await Promise.all(tarefas);
+  if (out._validade?.achou && out.anthropic) out.anthropic.expira_em = out._validade.expira_em;
+  delete out._validade;
+  return { out, provedorWA: (s.WA_PROVIDER || 'meta').toLowerCase() };
+}
+async function verificarChaves() {
+  const { data: atuais } = await db.from('chaves_saude').select('*');
+  const antes: Record<string, any> = Object.fromEntries((atuais ?? []).map((e) => [e.servico, e]));
+  const { out, provedorWA } = await leituras();
+  const c = await cfg(), uid = await adminId(), dados = { ...(c.avisos || {}) };
+  const novos: any[] = [], res: Record<string, string> = {};
+  for (const [servico, leitura] of Object.entries(out)) {
+    const depois = proximoEstado(antes[servico] ?? null, leitura, servico);
+    novos.push(depois);
+    res[servico] = depois.ok ? 'ok' : `fora: ${depois.detalhe}`;
+    const usado = servico === 'meta' ? provedorWA === 'meta' : servico === 'ycloud' ? provedorWA === 'ycloud' : true;
+    for (const a of avisosDasChaves(antes[servico] ?? null, depois, dados, Date.now(), usado)) {
+      if (uid) await avisar(uid, a.titulo, a.corpo, !!a.urgente).catch((e) => log('aviso', e.message));
+      dados[a.chave] = new Date().toISOString();
+    }
+  }
+  if (novos.length) await db.from('chaves_saude').upsert(novos, { onConflict: 'servico' });
+  for (const [k, v] of Object.entries(dados)) if (Date.now() - Date.parse(String(v)) > 60 * 864e5) delete dados[k];
+  await db.from('ia_config').update({ avisos: dados }).eq('id', 1);
+  // Anthropic e OpenAI boas de novo: devolve à memória o que falhou por chave (nada se perde, ninguém recebe resposta atrasada).
+  const ia = (s: string) => novos.find((e) => e.servico === s)?.ok;
+  const voltouAlguma = ['anthropic', 'openai'].some((s) => antes[s]?.ok === false && ia(s));
+  if (ia('anthropic') && ia('openai')) {
+    const n = Number(await rpc('recuperar_falhas_chave'));
+    if (n) res.recuperadas = `${n} mensagem(ns) devolvidas à memória${voltouAlguma ? ' (chave voltou)' : ''}`;
+  }
+  return res;
+}
+async function painelChaves() {
+  const { data } = await db.from('chaves_saude').select('*');
+  const prov = ((await segs()).WA_PROVIDER || 'meta').toLowerCase();
+  return Object.keys(SERVICOS).map((k) => {
+    const e = (data ?? []).find((x) => x.servico === k);
+    if (!e) return null;
+    const usado = k === 'meta' ? prov === 'meta' : k === 'ycloud' ? prov === 'ycloud' : true;
+    return { servico: k, nome: SERVICOS[k].nome, ok: e.ok, desde: e.desde, verificado_em: e.verificado_em, detalhe: e.detalhe, expira_em: e.expira_em,
+      saldo: e.saldo === null ? null : Number(e.saldo), troca: SERVICOS[k].troca, onde: SERVICOS[k].onde, usado, essencial: SERVICOS[k].essencial };
+  }).filter(Boolean);
+}
+// Troca de chave pelo app: confere formato, testa no fornecedor e só então grava no cofre (com o nome certo).
+async function trocarChave(servico: string, chave: string) {
+  const erro = formatoValido(servico, chave);
+  if (erro) throw falha(erro);
+  let leitura;
+  if (servico === 'anthropic') { const r = await conferir('https://api.anthropic.com/v1/models?limit=1', { headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01' } }); leitura = lerAnthropic(r.status, r.corpo); }
+  else if (servico === 'openai') { const r = await conferir('https://api.openai.com/v1/embeddings', { method: 'POST', headers: { Authorization: `Bearer ${chave}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'text-embedding-3-small', input: 'ok' }) }); leitura = lerOpenAI(r.status, r.corpo); }
+  else { const r = await conferir('https://api.ycloud.com/v2/balance', { headers: { 'X-API-Key': chave } }); leitura = lerYCloud(r.status, r.corpo); }
+  if (leitura.ok === false) throw falha(`${leitura.detalhe} Nada foi trocado.`);
+  if (leitura.ok === null) throw falha(`${leitura.detalhe} Nada foi trocado; tente de novo em instantes.`, 502);
+  await rpc('set_app_secret', { secret_name: NOME_SEGREDO[servico], secret_value: chave });
+  segCache = null;
+  log('chave trocada', servico);   // nunca o valor
+  return verificarChaves();
+}
+
 // ---------------------------------------------------------------- rotas
 const num = (v: unknown, min: number, max: number) => {
   if (v === null || v === '' || v === undefined) return null;
@@ -326,9 +440,18 @@ async function rotas(req: Request, rota: string, q: any) {
     await rpc('set_app_secret', { secret_name: 'ANTHROPIC_ADMIN_KEY', secret_value: chave });
     segCache = null;
     await sincronizarOficial(true).catch((e) => log('sincronizar', e.message));
+    await verificarChaves().catch((e) => log('chaves', e.message));   // a validade da chave da IA aparece na hora
     return json(await montarPainel());
   }
   if (rota === '/sincronizar') { await sincronizarOficial(true); return json(await montarPainel()); }
+  if (rota === '/chave') {
+    const servico = String(corpo.servico ?? ''), chave = String(corpo.chave ?? '').trim();
+    if (!NOME_SEGREDO[servico]) throw falha('Esse serviço não aceita troca de chave por aqui.');
+    if (!chave) throw falha('Cole a chave nova.');
+    await trocarChave(servico, chave);
+    return json(await montarPainel());
+  }
+  if (rota === '/chaves-testar') { await verificarChaves(); return json(await montarPainel()); }
   return json({ erro: 'não encontrado' }, 404);
 }
 
@@ -337,6 +460,12 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const rota = url.pathname.replace(/^.*\/consumo/, '') || '/';
   try {
+    if (rota === '/chaves-verificar') {
+      if (!igual(req.headers.get('x-cron-secret') ?? '', await seg('CRON_SECRET'))) return json({ erro: 'forbidden' }, 403);
+      const r = await verificarChaves();
+      log('chaves', JSON.stringify(r));
+      return json(r);
+    }
     if (rota === '/verificar') {
       if (!igual(req.headers.get('x-cron-secret') ?? '', await seg('CRON_SECRET'))) return json({ erro: 'forbidden' }, 403);
       const r = await verificar();
