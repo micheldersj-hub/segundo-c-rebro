@@ -30,6 +30,7 @@ await pg.route('**/*', async (rt) => {
   const p = u.pathname.replace('/functions/v1', '');
   const xc = rt.request().headers()['x-conta']; if (xc) contas.push(`${p} ${xc}`);
   if (rt.request().method() === 'POST') { posts.push(`${p} ${rt.request().postData() || ''}`); if (p.startsWith('/chat/conversas/c1/mensagens')) return j({ mensagem: { id: 'mn', texto: 'Feito, marquei.', minha: true, autor_nome: 'Ana', criado_em: new Date().toISOString() } }); return j({ ok: true }); }
+  if (p === '/app/agenda') return j(xc ? { google: true, eventos: [{ id: 'e1', titulo: 'Visita Padaria', inicio: iso(2), fim: iso(3), local: 'Padaria Pão Dourado, Betim' }] } : { google: false, eventos: [] });   // ela não tem Google próprio
   return j(R[p] ?? {});
 });
 await pg.addInitScript(() => { localStorage.setItem('cerebro-chave', 'k'); localStorage.setItem('cerebro-ativar-depois', String(Date.now())); });
@@ -39,6 +40,12 @@ try {
   await pg.goto('http://localhost:8769/index.html#hoje'); await pg.waitForTimeout(1500);
   ok(await pg.isVisible('.chat-atalho') && (await pg.textContent('#badge-equipe')) === '3', 'Hoje: botão do chat da equipe com 3 não lidas');
   ok(await pg.isVisible('#conta-agenda') && /Agenda de Carlos/.test(await pg.textContent('#conta-agenda')), 'Hoje: escolha "Minha agenda | Agenda de Carlos"');
+  ok(contas.some((c) => c.startsWith('/app/agenda') && c.endsWith(CHEFE)) && /Agenda de Carlos/.test(await pg.textContent('#conta-agenda .on')), 'Sem Google próprio: abre direto a agenda compartilhada');
+  ok(/Ir com Waze/.test(await pg.textContent('#linha-tempo')), 'Compromisso com endereço mostra "Ir com Waze" e Mapas');
+  await pg.click('[data-acao="evento"]'); await pg.waitForTimeout(400);
+  ok(/agenda de Carlos/.test(await pg.textContent('#folha-titulo')), 'Novo compromisso diz em qual agenda vai ser marcado');
+  await pg.fill('#folha [name=titulo]', 'Visita teste'); await pg.fill('#folha [name=local]', 'Rua Rio Orenoco, 725'); await pg.click('#folha-salvar'); await pg.waitForTimeout(600);
+  ok(posts.some((p) => p.startsWith('/app/agenda ') && p.includes('Rua Rio Orenoco')) && contas.filter((c) => c.startsWith('/app/agenda')).length > 1, 'Compromisso marcado na agenda compartilhada, com o endereço');
   contas.length = 0; await pg.click('[data-conta-agenda="' + CHEFE + '"]'); await pg.waitForTimeout(700);
   ok(contas.some((c) => c.startsWith('/app/agenda') && c.endsWith(CHEFE)), 'Agenda do chefe pedida com a conta dele');
   await pg.click('[data-conta-agenda=""]'); await pg.waitForTimeout(400);
