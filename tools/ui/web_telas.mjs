@@ -52,6 +52,9 @@ await ctx.route('**/*', async (rt) => {
   if (u.host.includes('fonts.')) return rt.fulfill({ status: 200, body: '' });
   const p = u.pathname.replace('/functions/v1', ''), j = (b) => rt.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(b) });
   const xc = rt.request().headers()['x-conta']; if (xc) contas.push(`${p} ${xc}`);
+  if (rt.request().method() === 'POST' && p === '/equipe/convidar') { posts.push(`${p} ${rt.request().postData()}`); return rt.fulfill({ status: 409, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ erro: 'Essa pessoa já está na equipe. Use "Novo link" na lista.' }) }); }
+  if (p === '/equipe' && rt.request().method() === 'GET') return rt.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ membros: [{ user_id: '11111111-1111-1111-1111-111111111111', email: 'lfirpe@gmail.com', nome: 'Luciene Firpe', ativo: true }] }) });
+  if (p === '/equipe/11111111-1111-1111-1111-111111111111/link') { posts.push(`${p} `); return rt.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ email: 'lfirpe@gmail.com', nome: 'Luciene Firpe', link: 'https://exemplo/#acesso=novo', validade_min: 60 }) }); }
   if (rt.request().method() === 'POST') { posts.push(`${p} ${rt.request().postData() || ''}`); if (p.startsWith('/chat/')) return j({ mensagem: { id: `mx${posts.length}`, texto: 'enviada', minha: true, autor_nome: 'Michelder', criado_em: new Date().toISOString() }, acessos: [], id: 'c2' }); return j({ ok: 'Enviado.', resposta: 'Certo, anotado.', tarefa: { dia: dia(1) }, id: 'd1', mensagem: 'ok', movidas: 1, para: dia(1) }); }
   return j(D2[p] ?? D[p] ?? D[p.replace(/\/[^/]+$/, '')] ?? {});
 });
@@ -82,7 +85,7 @@ try {
   ok((await pg.$$('.ag-ev')).length >= 1 && /Reunião B2B PAY/.test(await pg.textContent('#ag-vista')), 'Agenda: compromissos na grade de horários');
   ok(/Reunião B2B PAY/.test(await pg.textContent('#ag-prox')), 'Agenda: próximos 7 dias ao lado');
   ok(await semRolagem(), 'Agenda: sem rolagem lateral'); await foto('agenda_semana');
-  const col = await pg.$('.ag-col'); const bx = await col.boundingBox(); await pg.mouse.click(bx.x + bx.width / 2, bx.y + 3 * 60 + 10); await pg.waitForTimeout(250);
+  const col = await pg.$('.ag-col'); const bx = await col.boundingBox(), area = await (await pg.$('.ag-corpo')).boundingBox(); await pg.mouse.click(bx.x + bx.width / 2, area.y + 75);   // ponto visível da grade (ela abre rolada até a hora atual) await pg.waitForTimeout(250);
   ok(await pg.evaluate(() => document.querySelector('#janela').open && /\d\d:\d\d/.test(document.querySelector('#janela [name=inicio]').value)), 'Agenda: clicar num horário vazio abre "Novo compromisso" naquela hora');
   await pg.click('#janela [data-fechar]');
   await pg.click('[data-ag-modo="mes"]'); await pg.waitForTimeout(700);
@@ -126,6 +129,10 @@ try {
   await pg.check('#janela [name="agenda_11111111-1111-1111-1111-111111111111"]'); await pg.check('#janela [name="tarefas_11111111-1111-1111-1111-111111111111"]');
   await pg.click('#janela-ok'); await pg.waitForTimeout(400);
   ok(posts.some((p) => p.startsWith('/chat/acessos ') && p.includes('"agenda":true') && p.includes('"tarefas":true')), 'Equipe: compartilhamento grava agenda e tarefas');
+  await pg.click('[data-eq="convidar"]'); await pg.waitForTimeout(300);
+  await pg.fill('#janela [name=nome]', 'Luciene Firpe'); await pg.fill('#janela [name=email]', 'lfirpe@gmail.com'); await pg.click('#janela-ok'); await pg.waitForTimeout(700);
+  ok(posts.some((p) => p.startsWith('/equipe/11111111-1111-1111-1111-111111111111/link')) && /link novo/.test(await pg.textContent('#janela')) && /acesso=novo/.test(await pg.textContent('#janela')), 'Equipe: quem já está na equipe ganha um link novo (sem erro)');
+  await pg.click('#janela [data-fechar]');
   await pg.goto('http://localhost:8770/index.html#/tarefas'); await pg.waitForTimeout(1000);
   ok(await pg.isVisible('.seletor-conta'), 'Conta: seletor "Minha | Carlos" nas Tarefas');
   contas.length = 0; await pg.click('.seletor-conta [data-conta^="2222"]'); await pg.waitForTimeout(900);
