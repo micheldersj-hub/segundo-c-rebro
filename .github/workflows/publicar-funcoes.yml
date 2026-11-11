@@ -1,6 +1,6 @@
 # Publica funções no Supabase a partir do repositório (sem colar código na conversa).
 # Só roda quando alguém dispara à mão (Actions › Publicar funções › Run workflow) ou via API.
-# Requer o segredo SUPABASE_ACCESS_TOKEN (Settings › Secrets and variables › Actions), criado pelo dono.
+# Requer o token do Supabase como segredo SUPABASE_ACCESS_TOKEN ou DIMY_AGENDA (Settings › Secrets and variables › Actions), criado pelo dono.
 name: Publicar funções
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN || secrets.DIMY_AGENDA }}
       PROJETO: mavjbevuhzalkqyxaajw
       FUNCOES: ${{ inputs.funcoes }}
     steps:
