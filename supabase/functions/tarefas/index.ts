@@ -25,7 +25,7 @@ const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SE
 });
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'content-type, x-app-key, authorization',
+  'Access-Control-Allow-Headers': 'content-type, x-app-key, authorization, x-conta',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
@@ -49,6 +49,12 @@ const igual = (a: string, b: string) => {
   for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return d === 0;
 };
+// Agir pela conta de outra pessoa (ex.: secretária nas tarefas do dono): header x-conta + permissão em acessos_compartilhados.
+import { AsyncLocalStorage } from 'node:async_hooks';
+const pedido = new AsyncLocalStorage<{ autor: string | null }>();
+const autorAtual = () => pedido.getStore()?.autor ?? null;
+const marca = () => ({ ultimo_autor: autorAtual(), ultimo_autor_em: new Date().toISOString() });
+const porAgora = () => autorAtual() ?? 'app';
 const cacheJwt = new Map<string, { id: string; ate: number }>();
 async function usuario(req: Request): Promise<string | null> {
   const auth = req.headers.get('authorization') ?? '';
@@ -157,6 +163,7 @@ async function adiar(uid: string, ids: string[]) {
   for (const t of data ?? []) {
     const base = t.dia < hoje ? hoje : t.dia;
     await db.from('tarefas').update({
+      ...marca(),
       dia: proximoUtil(base),
       dia_original: t.dia_original ?? t.dia,
       adiada_vezes: (t.adiada_vezes ?? 0) + 1,
@@ -246,16 +253,29 @@ Na dúvida, não sugira. Prefira 0 a uma sugestão fraca.`;
 }
 
 // ---------------------------------------------------------------- rotas
-Deno.serve(async (req) => {
+Deno.serve((req) => pedido.run({ autor: null }, () => tratar(req)));
+async function tratar(req: Request) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   try {
     if (new URL(req.url).pathname.endsWith('/sugerir')) {
       if (!igual(req.headers.get('x-cron-secret') ?? '', await seg('CRON_SECRET'))) return json({ erro: 'forbidden' }, 403);
       return json(await sugerir());
     }
-    const uid = await usuario(req);
+    let uid = await usuario(req);
     if (!uid) return json({ erro: 'Sessão expirada. Entre de novo.' }, 401);
     const url = new URL(req.url);
+    const conta = req.headers.get('x-conta') ?? '';
+    if (conta && conta !== uid) {
+      // Ex.: secretária abrindo as tarefas do dono. Só com permissão dada por ele; excluir de vez continua só com o dono.
+      const { data: ac } = await db.from('acessos_compartilhados').select('tarefas').eq('dono', conta).eq('membro', uid).maybeSingle();
+      if (!ac?.tarefas) return json({ erro: 'Você não tem acesso às tarefas dessa pessoa.' }, 403);
+      const { data: dono } = await db.from('membros').select('ativo').eq('user_id', conta).maybeSingle();
+      if (!dono?.ativo) return json({ erro: 'Essa conta não está mais ativa.' }, 403);
+      if (/\/excluir$/.test(url.pathname)) return json({ erro: 'Só o dono das tarefas pode excluir de vez. Mande para a lixeira.' }, 403);
+      const { data: eu } = await db.from('membros').select('nome').eq('user_id', uid).maybeSingle();
+      pedido.getStore()!.autor = `por ${String(eu?.nome ?? 'equipe').split(' ')[0]}`;
+      uid = conta;
+    }
     const partes = url.pathname.replace(/^.*\/tarefas/, '').split('/').filter(Boolean);
     const corpo = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
 
@@ -315,6 +335,7 @@ Deno.serve(async (req) => {
       }
       const dia = diaValido(corpo.dia) ? corpo.dia : (s.dia && s.dia >= hojeSP() ? s.dia : hojeSP());
       const { data: t, error } = await db.from('tarefas').insert({
+        ...marca(),
         user_id: uid, titulo: String(corpo.titulo ?? s.titulo).slice(0, 300), notas: [s.notas, s.motivo ? `Por quê: ${s.motivo}` : null].filter(Boolean).join('\n').slice(0, 2000) || null,
         dia, prazo: s.prazo, prioridade: s.prioridade, projeto: s.projeto, empresa: s.empresa, contato_wa: s.contato_wa, origem: s.origem === 'olho' ? 'olho' : 'sugestao',
       }).select(CAMPOS).single();
@@ -326,7 +347,7 @@ Deno.serve(async (req) => {
     if (!partes.length) {
       const dados = limpar({ etapa: 'a_fazer', ...corpo });
       if (!dados.titulo) return json({ erro: 'Escreva a tarefa.' }, 400);
-      const { data, error } = await db.from('tarefas').insert({ user_id: uid, dia: hojeSP(), ...dados }).select(CAMPOS).single();
+      const { data, error } = await db.from('tarefas').insert({ user_id: uid, dia: hojeSP(), ...dados, ...marca() }).select(CAMPOS).single();
       if (error) throw error;
       return json({ tarefa: data });
     }
@@ -346,11 +367,11 @@ Deno.serve(async (req) => {
       return json({ ok: n > 0, tarefa: data });
     }
     if (partes[1] === 'arquivar') {
-      await db.from('tarefas').update({ arquivada: true, arquivada_em: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', uid);
+      await db.from('tarefas').update({ arquivada: true, arquivada_em: new Date().toISOString(), updated_at: new Date().toISOString(), ...marca() }).eq('id', id).eq('user_id', uid);
       return json({ ok: true });
     }
     if (partes[1] === 'restaurar') {
-      const { data } = await db.from('tarefas').update({ arquivada: false, arquivada_em: null, updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', uid).select(CAMPOS).maybeSingle();
+      const { data } = await db.from('tarefas').update({ arquivada: false, arquivada_em: null, updated_at: new Date().toISOString(), ...marca() }).eq('id', id).eq('user_id', uid).select(CAMPOS).maybeSingle();
       return data ? json({ ok: true, tarefa: data }) : json({ erro: 'Tarefa não encontrada.' }, 404);
     }
     if (partes[1] === 'excluir') {
@@ -368,7 +389,7 @@ Deno.serve(async (req) => {
       const texto = String(corpo.texto ?? '').trim().slice(0, 1000);
       if (!texto) return json({ erro: 'Escreva a anotação.' }, 400);
       if (!(await dono())) return json({ erro: 'Tarefa não encontrada.' }, 404);
-      await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'nota', detalhe: texto, por: 'app' });
+      await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'nota', detalhe: texto, por: porAgora() });
       return json({ ok: true });
     }
     if (partes[1] === 'subtarefas') {
@@ -379,25 +400,25 @@ Deno.serve(async (req) => {
         if (!titulo) return json({ erro: 'Escreva a subtarefa.' }, 400);
         const { data, error } = await db.from('tarefa_subtarefas').insert({ tarefa_id: id, titulo }).select('id, titulo, feita, ordem').single();
         if (error) throw error;
-        await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `+ ${titulo}`, por: 'app' });
+        await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `+ ${titulo}`, por: porAgora() });
         return json({ subtarefa: data });
       }
       if (!/^[0-9a-f-]{36}$/.test(sid)) return json({ erro: 'subtarefa inválida' }, 400);
       if (partes[3] === 'apagar') {
         const { data } = await db.from('tarefa_subtarefas').delete().eq('id', sid).eq('tarefa_id', id).select('titulo').maybeSingle();
-        if (data) await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `− ${data.titulo}`, por: 'app' });
+        if (data) await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `− ${data.titulo}`, por: porAgora() });
         return json({ ok: true });
       }
       const up: Record<string, unknown> = {};
       if (typeof corpo.titulo === 'string' && corpo.titulo.trim()) up.titulo = corpo.titulo.trim().slice(0, 200);
       if (typeof corpo.feita === 'boolean') up.feita = corpo.feita;
       const { data } = await db.from('tarefa_subtarefas').update(up).eq('id', sid).eq('tarefa_id', id).select('id, titulo, feita, ordem').maybeSingle();
-      if (data && typeof corpo.feita === 'boolean') await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `${corpo.feita ? '✓' : '○'} ${data.titulo}`, por: 'app' });
+      if (data && typeof corpo.feita === 'boolean') await db.from('tarefa_historico').insert({ tarefa_id: id, acao: 'subtarefa', detalhe: `${corpo.feita ? '✓' : '○'} ${data.titulo}`, por: porAgora() });
       return data ? json({ subtarefa: data }) : json({ erro: 'Subtarefa não encontrada.' }, 404);
     }
     if (partes.length === 1) {
       const up = limpar(corpo);
-      const { data, error } = await db.from('tarefas').update({ ...up, updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', uid).select(CAMPOS).maybeSingle();
+      const { data, error } = await db.from('tarefas').update({ ...up, updated_at: new Date().toISOString(), ...marca() }).eq('id', id).eq('user_id', uid).select(CAMPOS).maybeSingle();
       if (error) throw error;
       if (!data) return json({ erro: 'Tarefa não encontrada.' }, 404);
       return json({ tarefa: data });
@@ -407,7 +428,7 @@ Deno.serve(async (req) => {
     console.error('tarefas', e);
     return json({ erro: (e as Error).message || 'Falhou. Tente de novo.' }, 400);
   }
-});
+}
 
 // ---- consumo de IA (0032): grava tokens e buscas de cada chamada bem-sucedida em ia_consumo; nunca bloqueia nem quebra a chamada.
 import { AsyncLocalStorage as __IA_ALS } from "node:async_hooks";
