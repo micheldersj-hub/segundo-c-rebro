@@ -30,6 +30,9 @@ const TF = fx('tarefas.json'), longa = 'Camila (+553796706371). Entrega de amanh
 TF.atrasadas = [{ ...TF.tarefas[0], id: '00000000-0000-0000-0000-0000000000a1', titulo: 'Alinhar com a Amanda sobre o cliente Calango, de Pará de Minas, no F7 na Contrapag', notas: longa, dia: dia(-7), adiada_vezes: 1, prazo: null, etapa: 'a_fazer' },
   { ...TF.tarefas[0], id: '00000000-0000-0000-0000-0000000000a2', titulo: 'Ver com a Amanda a diferença de valores e desconto no aluguel de máquina da Nabrasa', notas: longa, dia: dia(-7), prioridade: 1, prazo: null, etapa: 'a_fazer' }];
 TF.tarefas = TF.tarefas.map((t, i) => (i === 0 ? { ...t, notas: longa } : t)); D['/tarefas'] = TF;
+// Caso real: muitos urgentes e avisos (antes, a coluna da direita ficava enorme e obrigava a rolar a página inteira)
+D['/app/hoje'].avisos.push(...Array.from({ length: 14 }, (_, i) => ({ id: `u${i}`, kind: i % 3 ? 'urgente' : 'info', title: i % 3 ? 'Urgente' : `${i} conversas novas`, body: `💬 Cliente ${i}: posso responder? Erick pede uma diretriz de como abordar o Eduardo sobre a operação dos postos (antecipação 25k com trava na carteira), ainda não o contatou. Preparei a resposta; aprove no contato.`, data: { contact: '5531988887777' }, created_at: iso(-i) })));
+D['/app/hoje'].aguardando = Array.from({ length: 15 }, (_, i) => ({ ...contatos[0], wa_id: `55319000000${String(i).padStart(2, '0')}`, name: `Contato ${i}`, last_in_at: iso(-i * 20) }));
 const D2 = { [`/tarefas/${fx('tarefas.json').tarefas[0].id}/detalhe`]: { tarefa: fx('tarefas.json').tarefas[0], subtarefas: [], historico: [] }, '/app/contatos/5531977776666': { contato: contatos[1], mensagens: [{ direction: 'in', body: 'Obrigada!', occurred_at: iso(-50) }], perfil: null }, '/app/contatos/5531988887777': { contato: contatos[0], mensagens: [{ direction: 'in', body: 'Oi, me manda a proposta?', occurred_at: iso(-1) }, { direction: 'out', body: 'Claro, já envio.', occurred_at: iso(-0.9) }], perfil: { relacao: 'prospect', empresa: 'Padaria Sol', resumo: 'Dono de padaria', temas: ['maquininha'], pendencias: ['Enviar proposta'], msgs_analisadas: 12, atualizado_em: iso(-5) } } };
 const br = await chromium.launch(); const ctx = await br.newContext({ viewport: { width: LARG, height: 900 }, colorScheme: ESCURO ? 'dark' : 'light' });
 const pg = await ctx.newPage(); const erros = [], posts = [];
@@ -49,11 +52,19 @@ const semRolagem = () => pg.evaluate(() => document.documentElement.scrollWidth 
 const foto = (n) => pg.screenshot({ path: `${SAIDA}/web_${n}_${LARG}${ESCURO ? '_escuro' : ''}.png` });
 try {
   await pg.goto('http://localhost:8770/index.html#/hoje'); await pg.waitForTimeout(1500);
-  ok(await pg.isVisible('.lateral') && (await pg.$$('.cal-dia')).length >= 28, 'Hoje: menu lateral e calendário do mês');
-  ok(/Reunião B2B PAY/.test(await pg.textContent('#h-grade')), 'Hoje: compromissos dentro do calendário');
-  ok(/Bruno precisa da proposta/.test(await pg.textContent('#h-agora')), 'Hoje: "Agora" com o urgente');
-  ok(/Ligar para o contador/.test(await pg.textContent('#h-lembretes')), 'Hoje: lembretes');
-  ok(await semRolagem(), 'Hoje: sem rolagem lateral'); await foto('hoje');
+  ok(await pg.isVisible('.lateral') && (await pg.$$('.hj-tile')).length >= 4 && (await pg.$$('.hj-bloco')).length >= 5, 'Hoje: resumo do dia e painel em colunas');
+  ok(/Reunião B2B PAY/.test(await pg.textContent('#h-agenda')), 'Hoje: agenda de hoje');
+  ok(/posso responder/.test(await pg.textContent('#h-pede')) && /Ligar para o contador/.test(await pg.textContent('#h-lembretes')), 'Hoje: "Pede você" e lembretes');
+  ok(await semRolagem(), 'Hoje: sem rolagem lateral');
+  if (LARG >= 1200) ok(await pg.evaluate(() => document.scrollingElement.scrollHeight <= innerHeight + 1), 'Hoje: cabe na janela, sem rolar a página (cada bloco rola por dentro)');
+  if (LARG >= 1200) ok(await pg.evaluate(() => [...document.querySelectorAll('.hj-bloco')].filter((b) => !b.hidden).every((b) => b.getBoundingClientRect().bottom <= innerHeight + 1)), 'Hoje: nenhum bloco termina abaixo da janela');
+  await foto('hoje');
+  await pg.click('[data-h-visto]'); await pg.waitForTimeout(400);
+  ok(posts.some((p) => /^\/app\/avisos\/[^/]+\/lido /.test(p)), 'Hoje: "Resolvido" marca só aquele aviso');
+  await pg.click('[data-h-aba="avisos"]'); await pg.waitForTimeout(200);
+  ok(/conversas novas/.test(await pg.textContent('#h-pede')), 'Hoje: aba Avisos');
+  await pg.click('[data-h-concluir]'); await pg.waitForTimeout(500);
+  ok(posts.some((p) => /^\/tarefas\/[^/ ]+ /.test(p) && p.includes('"etapa":"feito"')), 'Hoje: concluir tarefa com um clique');
   await pg.click('[data-h="evento"]'); await pg.waitForTimeout(200);
   await pg.fill('#janela [name=titulo]', 'Teste visita'); await pg.click('#janela-ok'); await pg.waitForTimeout(500);
   ok(posts.some((p) => p.startsWith('/app/agenda ') && p.includes('Teste visita')), 'Hoje: novo compromisso grava em /agenda (mesma rota do app)');
