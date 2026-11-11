@@ -33,9 +33,17 @@ TF.tarefas = TF.tarefas.map((t, i) => (i === 0 ? { ...t, notas: longa } : t)); D
 // Caso real: muitos urgentes e avisos (antes, a coluna da direita ficava enorme e obrigava a rolar a página inteira)
 D['/app/hoje'].avisos.push(...Array.from({ length: 14 }, (_, i) => ({ id: `u${i}`, kind: i % 3 ? 'urgente' : 'info', title: i % 3 ? 'Urgente' : `${i} conversas novas`, body: `💬 Cliente ${i}: posso responder? Erick pede uma diretriz de como abordar o Eduardo sobre a operação dos postos (antecipação 25k com trava na carteira), ainda não o contatou. Preparei a resposta; aprove no contato.`, data: { contact: '5531988887777' }, created_at: iso(-i) })));
 D['/app/hoje'].aguardando = Array.from({ length: 15 }, (_, i) => ({ ...contatos[0], wa_id: `55319000000${String(i).padStart(2, '0')}`, name: `Contato ${i}`, last_in_at: iso(-i * 20) }));
+// Equipe: chat e conta compartilhada (secretária vendo agenda/tarefas do chefe)
+Object.assign(D, {
+  '/chat/pessoas': { eu: { id: 'u1', nome: 'Michelder', admin: true }, equipe: [{ id: '11111111-1111-1111-1111-111111111111', nome: 'Ana Secretária' }], compartilhadas: [{ dono: '22222222-2222-2222-2222-222222222222', nome: 'Carlos Chefe', agenda: true, tarefas: true }] },
+  '/chat/naolidas': { total: 2 },
+  '/chat/acessos': { acessos: [] },
+  '/chat/conversas': { conversas: [{ id: 'c1', tipo: 'grupo', nome: 'Equipe', participantes: 2, ultima: { texto: 'Bom dia!', autor: 'Ana', em: iso(-1) }, nao_lidas: 2, ativo: true }, { id: 'c2', tipo: 'individual', nome: 'Ana Secretária', com: '11111111-1111-1111-1111-111111111111', participantes: 2, ultima: null, nao_lidas: 0, ativo: true }] },
+  '/chat/conversas/c1/mensagens': { mensagens: [{ id: 'm1', autor: 'a', autor_nome: 'Ana Secretária', texto: 'Bom dia! Confirmei a visita das 14h.', criado_em: iso(-1), minha: false }, { id: 'm2', autor: 'u1', autor_nome: 'Michelder', texto: 'Ótimo, obrigado.', criado_em: iso(-0.5), minha: true }, { id: 'm3', autor: 'a', autor_nome: 'Ana Secretária', anexo_nome: 'proposta.pdf', anexo_tipo: 'application/pdf', anexo_tamanho: 120000, criado_em: iso(-0.4), minha: false }], mais: false, lido_pelos_outros: iso(-0.45) },
+});
 const D2 = { [`/tarefas/${fx('tarefas.json').tarefas[0].id}/detalhe`]: { tarefa: fx('tarefas.json').tarefas[0], subtarefas: [], historico: [] }, '/app/contatos/5531977776666': { contato: contatos[1], mensagens: [{ direction: 'in', body: 'Obrigada!', occurred_at: iso(-50) }], perfil: null }, '/app/contatos/5531988887777': { contato: contatos[0], mensagens: [{ direction: 'in', body: 'Oi, me manda a proposta?', occurred_at: iso(-1) }, { direction: 'out', body: 'Claro, já envio.', occurred_at: iso(-0.9) }], perfil: { relacao: 'prospect', empresa: 'Padaria Sol', resumo: 'Dono de padaria', temas: ['maquininha'], pendencias: ['Enviar proposta'], msgs_analisadas: 12, atualizado_em: iso(-5) } } };
 const br = await chromium.launch(); const ctx = await br.newContext({ viewport: { width: LARG, height: 900 }, colorScheme: ESCURO ? 'dark' : 'light' });
-const pg = await ctx.newPage(); const erros = [], posts = [];
+const pg = await ctx.newPage(); const erros = [], posts = [], contas = [];
 pg.on('pageerror', (e) => erros.push(e.message)); pg.on('console', (m) => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && erros.push(m.text()));
 await ctx.route('**/*', async (rt) => {
   const u = new URL(rt.request().url());
@@ -43,7 +51,8 @@ await ctx.route('**/*', async (rt) => {
   if (u.host.includes('jsdelivr')) return rt.fulfill({ status: 200, contentType: 'text/javascript', body: STUB });
   if (u.host.includes('fonts.')) return rt.fulfill({ status: 200, body: '' });
   const p = u.pathname.replace('/functions/v1', ''), j = (b) => rt.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(b) });
-  if (rt.request().method() === 'POST') { posts.push(`${p} ${rt.request().postData() || ''}`); return j({ ok: 'Enviado.', resposta: 'Certo, anotado.', tarefa: { dia: dia(1) }, id: 'd1', mensagem: 'ok', movidas: 1, para: dia(1) }); }
+  const xc = rt.request().headers()['x-conta']; if (xc) contas.push(`${p} ${xc}`);
+  if (rt.request().method() === 'POST') { posts.push(`${p} ${rt.request().postData() || ''}`); if (p.startsWith('/chat/')) return j({ mensagem: { id: `mx${posts.length}`, texto: 'enviada', minha: true, autor_nome: 'Michelder', criado_em: new Date().toISOString() }, acessos: [], id: 'c2' }); return j({ ok: 'Enviado.', resposta: 'Certo, anotado.', tarefa: { dia: dia(1) }, id: 'd1', mensagem: 'ok', movidas: 1, para: dia(1) }); }
   return j(D2[p] ?? D[p] ?? D[p.replace(/\/[^/]+$/, '')] ?? {});
 });
 await pg.addInitScript(() => { localStorage.setItem('cerebro-chave', 'k'); });
@@ -105,6 +114,27 @@ try {
   await foto('whats');
   await pg.click('[data-wa="5531977776666"]'); await pg.waitForTimeout(800);
   ok(await pg.isVisible('#wa-abrir') && /24 h/.test(await pg.textContent('#wa-dica24')), 'WhatsApp: fora das 24 h abre o WhatsApp Web');
+  await pg.goto('http://localhost:8770/index.html#/equipe'); await pg.waitForTimeout(1200);
+  ok(await pg.isVisible('.menu a[data-menu="equipe"].on') && (await pg.$$('#eq-lista .pessoa')).length === 2, 'Equipe: no menu, com grupo e conversa individual');
+  ok(/Confirmei a visita/.test(await pg.textContent('#eq-msgs')) && /proposta\.pdf/.test(await pg.textContent('#eq-msgs')), 'Equipe: mensagens e arquivo na conversa do grupo');
+  ok(/2/.test(await pg.textContent('#b-equipe')), 'Equipe: contador de não lidas no menu');
+  await pg.fill('#eq-texto', 'Pode marcar para amanhã'); await pg.press('#eq-texto', 'Enter'); await pg.waitForTimeout(400);
+  ok(posts.some((p) => p.startsWith('/chat/conversas/c1/mensagens ') && p.includes('Pode marcar')), 'Equipe: Enter envia a mensagem');
+  ok(await semRolagem(), 'Equipe: sem rolagem lateral'); await foto('equipe');
+  await pg.click('[data-eq="compartilhar"]'); await pg.waitForTimeout(400);
+  ok(await pg.evaluate(() => document.querySelector('#janela').open && /Ana Secretária/.test(document.querySelector('#janela').textContent)), 'Equipe: compartilhar agenda e tarefas lista a equipe');
+  await pg.check('#janela [name="agenda_11111111-1111-1111-1111-111111111111"]'); await pg.check('#janela [name="tarefas_11111111-1111-1111-1111-111111111111"]');
+  await pg.click('#janela-ok'); await pg.waitForTimeout(400);
+  ok(posts.some((p) => p.startsWith('/chat/acessos ') && p.includes('"agenda":true') && p.includes('"tarefas":true')), 'Equipe: compartilhamento grava agenda e tarefas');
+  await pg.goto('http://localhost:8770/index.html#/tarefas'); await pg.waitForTimeout(1000);
+  ok(await pg.isVisible('.seletor-conta'), 'Conta: seletor "Minha | Carlos" nas Tarefas');
+  contas.length = 0; await pg.click('.seletor-conta [data-conta^="2222"]'); await pg.waitForTimeout(900);
+  ok(contas.some((c) => c.startsWith('/tarefas')) && /Tarefas de Carlos Chefe/.test(await pg.textContent('.cab-sup')), 'Conta: ao escolher o chefe, as tarefas vêm da conta dele');
+  await pg.goto('http://localhost:8770/index.html#/agenda'); await pg.waitForTimeout(900);
+  ok(contas.some((c) => c.startsWith('/app/agenda')), 'Conta: a agenda também vem da conta escolhida');
+  contas.length = 0; await pg.goto('http://localhost:8770/index.html#/hoje'); await pg.waitForTimeout(900);
+  ok(!contas.length, 'Conta: a tela Hoje continua sendo da própria pessoa');
+  await pg.goto('http://localhost:8770/index.html#/agenda'); await pg.waitForTimeout(600); await pg.click('.seletor-conta [data-conta=""]'); await pg.waitForTimeout(500);
   await pg.goto('http://localhost:8770/index.html#/oraculo/d1'); await pg.waitForTimeout(1200);
   ok(/Padaria Três Poderes/.test(await pg.textContent('#or-detalhe')) && /Risco baixo/.test(await pg.textContent('#or-detalhe')), 'Oráculo: dossiê ao lado da lista');
   await pg.click('[data-or-aba="socios"]');
