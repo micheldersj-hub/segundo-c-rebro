@@ -25,6 +25,11 @@ const D = {
   '/oraculo/dossies/d1': { id: 'd1', nome: 'Padaria Três Poderes', cnpj: '12345678000190', status: 'pronto', risco: 'baixo', cadastro: { situacao: 'ATIVA', abertura: '2010-05-01', porte: 'ME', simples: true, capital_social: 50000, cnae_fiscal_descricao: 'Padaria e confeitaria', municipio: 'Betim', uf: 'MG', telefone: '3133334444' },
     dossie: { resumo: 'Empresa familiar de panificação.', financeiro: { resumo: 'Sem sinais negativos públicos.', sinais: [] }, abordagem: { tese: 'Volume alto no cartão', gancho: 'Taxas de antecipação', canal: 'Dono, pessoalmente', mensagem_whatsapp: 'Oi! Sou da B2B PAY…', roteiro: ['Apresentar', 'Simular'], objecoes: [{ objecao: 'Já tenho maquininha', resposta: 'Compare as taxas' }] }, empresa: { o_que_faz: 'Pães e doces' }, mercado: { posicionamento: 'Bairro', concorrentes: ['Padaria X'] }, socios: [{ nome: 'João Silva', cargo: 'Sócio', papel: 'decisor', perfil: 'Fundador' }], proximos_passos: ['Agendar visita'] }, fontes: ['https://exemplo.com.br'] },
 };
+// Caso real que quebrou o quadro: atrasadas com anotação longa (o cartão passava por cima da coluna vizinha)
+const TF = fx('tarefas.json'), longa = 'Camila (+553796706371). Entrega de amanhã cancelada porque a máquina não foi liberada a tempo; nova previsão terça 10/11 ou quarta 11/11. Por quê? Ver com o suporte e confirmar com o cliente antes de reagendar.';
+TF.atrasadas = [{ ...TF.tarefas[0], id: '00000000-0000-0000-0000-0000000000a1', titulo: 'Alinhar com a Amanda sobre o cliente Calango, de Pará de Minas, no F7 na Contrapag', notas: longa, dia: dia(-7), adiada_vezes: 1, prazo: null, etapa: 'a_fazer' },
+  { ...TF.tarefas[0], id: '00000000-0000-0000-0000-0000000000a2', titulo: 'Ver com a Amanda a diferença de valores e desconto no aluguel de máquina da Nabrasa', notas: longa, dia: dia(-7), prioridade: 1, prazo: null, etapa: 'a_fazer' }];
+TF.tarefas = TF.tarefas.map((t, i) => (i === 0 ? { ...t, notas: longa } : t)); D['/tarefas'] = TF;
 const D2 = { [`/tarefas/${fx('tarefas.json').tarefas[0].id}/detalhe`]: { tarefa: fx('tarefas.json').tarefas[0], subtarefas: [], historico: [] }, '/app/contatos/5531977776666': { contato: contatos[1], mensagens: [{ direction: 'in', body: 'Obrigada!', occurred_at: iso(-50) }], perfil: null }, '/app/contatos/5531988887777': { contato: contatos[0], mensagens: [{ direction: 'in', body: 'Oi, me manda a proposta?', occurred_at: iso(-1) }, { direction: 'out', body: 'Claro, já envio.', occurred_at: iso(-0.9) }], perfil: { relacao: 'prospect', empresa: 'Padaria Sol', resumo: 'Dono de padaria', temas: ['maquininha'], pendencias: ['Enviar proposta'], msgs_analisadas: 12, atualizado_em: iso(-5) } } };
 const br = await chromium.launch(); const ctx = await br.newContext({ viewport: { width: LARG, height: 900 }, colorScheme: ESCURO ? 'dark' : 'light' });
 const pg = await ctx.newPage(); const erros = [], posts = [];
@@ -52,9 +57,23 @@ try {
   await pg.click('[data-h="evento"]'); await pg.waitForTimeout(200);
   await pg.fill('#janela [name=titulo]', 'Teste visita'); await pg.click('#janela-ok'); await pg.waitForTimeout(500);
   ok(posts.some((p) => p.startsWith('/app/agenda ') && p.includes('Teste visita')), 'Hoje: novo compromisso grava em /agenda (mesma rota do app)');
+  await pg.goto('http://localhost:8770/index.html#/agenda/semana'); await pg.waitForTimeout(1200);
+  ok(await pg.isVisible('.menu a[data-menu="agenda"].on') && (await pg.$$('.ag-cab-dia')).length === 7, 'Agenda: no menu e com a semana em colunas');
+  ok((await pg.$$('.ag-ev')).length >= 1 && /Reunião B2B PAY/.test(await pg.textContent('#ag-vista')), 'Agenda: compromissos na grade de horários');
+  ok(/Reunião B2B PAY/.test(await pg.textContent('#ag-prox')), 'Agenda: próximos 7 dias ao lado');
+  ok(await semRolagem(), 'Agenda: sem rolagem lateral'); await foto('agenda_semana');
+  const col = await pg.$('.ag-col'); const bx = await col.boundingBox(); await pg.mouse.click(bx.x + bx.width / 2, bx.y + 3 * 60 + 10); await pg.waitForTimeout(250);
+  ok(await pg.evaluate(() => document.querySelector('#janela').open && /\d\d:\d\d/.test(document.querySelector('#janela [name=inicio]').value)), 'Agenda: clicar num horário vazio abre "Novo compromisso" naquela hora');
+  await pg.click('#janela [data-fechar]');
+  await pg.click('[data-ag-modo="mes"]'); await pg.waitForTimeout(700);
+  ok((await pg.$$('.ag-mes .cal-dia')).length >= 28 && /Reunião B2B PAY/.test(await pg.textContent('#ag-vista')), 'Agenda: visão do mês'); await foto('agenda_mes');
+  await pg.click('[data-ag-modo="dia"]'); await pg.waitForTimeout(700);
+  ok((await pg.$$('.ag-col')).length === 1, 'Agenda: visão do dia');
   await pg.goto('http://localhost:8770/index.html#/tarefas'); await pg.waitForTimeout(1200);
   ok((await pg.$$('.tf-col')).length >= 3 && (await pg.$$('.tf-card')).length > 0, 'Tarefas: quadro com colunas e cartões');
   ok(await semRolagem(), 'Tarefas: sem rolagem lateral'); await foto('tarefas');
+  ok(await pg.evaluate(() => [...document.querySelectorAll('.tf-col')].every((c) => { const r = c.getBoundingClientRect(); return [...c.querySelectorAll('.tf-card')].every((k) => { const q = k.getBoundingClientRect(); return q.left >= r.left - 1 && q.right <= r.right + 1; }); })), 'Tarefas: nenhum cartão passa da sua coluna (notas longas)');
+  ok(/Reunião B2B PAY/.test(await pg.textContent('#tf-agenda')), 'Tarefas: compromissos do dia acima do quadro');
   await pg.fill('#tf-titulo', 'Nova pelo computador'); await pg.press('#tf-titulo', 'Enter'); await pg.waitForTimeout(400);
   ok(posts.some((p) => p.startsWith('/tarefas ') && p.includes('Nova pelo computador')), 'Tarefas: Enter cria tarefa');
   await pg.locator('.tf-col[data-tf-col="a_fazer"] .tf-card').first().dragTo(pg.locator('.tf-col[data-tf-col="fazendo"]')); await pg.waitForTimeout(500);
